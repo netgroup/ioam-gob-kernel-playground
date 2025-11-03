@@ -22,6 +22,27 @@
 #define lock_xadd(ptr, val)	((void) __sync_fetch_and_add(ptr, val))
 #endif
 
+#ifndef offsetof
+#define offsetof(TYPE, MEMBER)	__builtin_offsetof(TYPE, MEMBER)
+#endif
+
+/**
+ * sizeof_field() - Report the size of a struct field in bytes
+ *
+ * @TYPE: The structure containing the field of interest
+ * @MEMBER: The field to return the size of
+ */
+#define sizeof_field(TYPE, MEMBER) sizeof((((TYPE *)0)->MEMBER))
+
+/**
+ * offsetofend() - Report the offset of a struct field within the struct
+ *
+ * @TYPE: The type of the structure
+ * @MEMBER: The member within the structure to get the end offset of
+ */
+#define offsetofend(TYPE, MEMBER) \
+	(offsetof(TYPE, MEMBER)	+ sizeof_field(TYPE, MEMBER))
+
 struct proc_stats {
 	__u64 drop;
 };
@@ -157,6 +178,260 @@ int  xdp_prog_drop_icmpv6(struct xdp_md *ctx)
 	/* Pass the packet to the upper kernel networking */
 out:
 	return XDP_PASS;
+}
+
+SEC("pdum0")
+int test_pdummy0(struct __sk_buff *skb)
+{
+	return BPF_OK;
+}
+
+SEC("pdum1")
+int test_pdummy1(struct __sk_buff *skb)
+{
+	bpf_printk("hello pdum1");
+	return BPF_OK;
+}
+
+SEC("ioam6_dum0")
+int test_ioam6_dum0(struct __sk_buff *skb)
+{
+	struct ipv6hdr ip6h;
+	__u8 hop_limit;
+
+	if (skb->protocol != bpf_htons(ETH_P_IPV6))
+		goto out;
+
+	if (bpf_skb_load_bytes(skb, 0, &ip6h, sizeof(ip6h)))
+		goto out;
+
+	bpf_printk("ioam6_dum0: IPv6 nexthdr proto=%d", ip6h.nexthdr);
+
+	hop_limit = ip6h.hop_limit;
+	if (hop_limit > 64) {
+		bpf_printk("ioam6_dum0: IPv6 hoplimit (%d) must be <= 64; packet will be dropped",
+			   hop_limit);
+		 return BPF_DROP;
+	}
+out:
+	return BPF_OK;
+}
+
+SEC("ioam6_dum1")
+int test_ioam6_dum1(struct __sk_buff *skb)
+{
+	struct ipv6hdr ip6h;
+	__u8 hop_limit;
+
+	if (skb->protocol != bpf_htons(ETH_P_IPV6))
+		goto out;
+
+	if (bpf_skb_load_bytes(skb, 0, &ip6h, sizeof(ip6h)))
+		goto out;
+
+	hop_limit = ip6h.hop_limit;
+
+	bpf_printk("IPv6 Hop Limit=%d", hop_limit);
+
+out:
+	return BPF_OK;
+}
+
+int bpf_ioam6_trace_gob_store_bytes(struct __sk_buff *,
+				    u32, const void *, u32) __ksym;
+
+SEC("ioam6_cntv1")
+int test_ioam6_cntv1(struct __sk_buff *skb)
+{
+#define GOB_PAYLOAD 8
+	struct trace_hdr {
+		struct ioam6_trace_hdr trace;
+		struct ioam6_trace_gob_hdr gob;
+		__u8 data[GOB_PAYLOAD];
+	} hdr = { 0, };
+	__u32 counter, ocounter;
+	__u32 trace_off;
+	int ret;
+
+	/* offset starts from skb->data which is network (IPv6) aligned */
+	trace_off = sizeof(struct ipv6hdr) + sizeof(struct ioam6_lwt_encap) -
+                    sizeof(struct ioam6_trace_hdr);
+	ret = bpf_skb_load_bytes(skb, trace_off, &hdr, sizeof(hdr));
+	if (ret) {
+		bpf_printk("Cannot read the IOAM trace headers");
+		goto out;
+	}
+
+	if (!hdr.trace.type.gob)
+		/* no gob header found */
+		goto out;
+
+	ocounter = counter = bpf_ntohl(*(__be32 *)hdr.data);
+	++counter;
+	*(__be32 *)hdr.data = bpf_htonl(counter);
+
+	ret = bpf_ioam6_trace_gob_store_bytes(skb, 4, hdr.data,
+					      sizeof(hdr.data));
+	if (ret) {
+		bpf_printk("Cannot write on GOB Payload");
+		goto out;
+	}
+
+	hdr.data[4] = 0xde;
+	hdr.data[5] = 0xad;
+	hdr.data[6] = 0xbe;
+	hdr.data[7] = 0xef;
+
+	ret = bpf_ioam6_trace_gob_store_bytes(skb, 8, hdr.data + 4, 4);
+	if (!ret) {
+		bpf_printk("ancillary data written");
+	}
+
+	bpf_printk("IOAM PTO GOB read before=%d, after=%d",
+		   ocounter, counter);
+out:
+	return BPF_OK;
+#undef GOB_PAYLOAD
+}
+
+int bpf_ioam6_trace_gob_load_bytes(struct __sk_buff *, u32, void *, u32) __ksym;
+
+SEC("ioam6_cntv2")
+int test_ioam6_cntv2(struct __sk_buff *skb)
+{
+#define GOB_PAYLOAD 8
+	struct gob {
+		struct ioam6_trace_gob_hdr gob;
+		__u8 data[GOB_PAYLOAD];
+	} __attribute__((packed)) hdr = { 0, };
+	__u32 counter, ocounter;
+	__u32 gob_len;
+	int ret;
+
+	ret = bpf_ioam6_trace_gob_load_bytes(skb, 0, &hdr, sizeof(hdr));
+	if (ret) {
+		bpf_printk("Cannot read bytes from GOB");
+		goto out;
+	}
+
+	gob_len = (bpf_htonl(hdr.gob.hdr) >> 24) * 4 + sizeof(hdr.gob);
+
+	ocounter = counter = bpf_ntohl(*(__be32 *)hdr.data);
+	++counter;
+	*(__be32 *)hdr.data = bpf_htonl(counter);
+
+	ret = bpf_ioam6_trace_gob_store_bytes(skb, 4, hdr.data,
+					      sizeof(hdr.data));
+	if (ret) {
+		bpf_printk("Cannot write on GOB Payload");
+		goto out;
+	}
+
+	hdr.data[4] = 0xde;
+	hdr.data[5] = 0xad;
+	hdr.data[6] = 0xbe;
+	hdr.data[7] = 0xef;
+
+	ret = bpf_ioam6_trace_gob_store_bytes(skb, 8, hdr.data + 4, 4);
+	if (ret) {
+		bpf_printk("cannot write ancillary data");
+	}
+
+	bpf_printk("IOAM PTO GOB (Len=%d) read before=%d, after=%d",
+		   gob_len, ocounter, counter);
+out:
+	return BPF_OK;
+#undef GOB_PAYLOAD
+}
+
+struct scratch {
+#define SCRATCH_AREA_SIZE 64
+	__u8 data[SCRATCH_AREA_SIZE];
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__type(key, __u32);
+	__type(value, struct scratch);
+	__uint(max_entries, 1);
+} ioam6_scratch_map SEC(".maps");
+
+SEC("ioam6_cntv3")
+int test_ioam6_cntv3(struct __sk_buff *skb)
+{
+#define GOB_PAYLOAD 8
+	struct gob {
+		struct ioam6_trace_gob_hdr gob;
+		/* payload data */
+		union {
+			__be32 counter;
+			__u8 data[GOB_PAYLOAD];
+		};
+	} __attribute__((packed)) *h;
+	struct scratch *sarea = NULL;
+	__u32 counter, ocounter;
+	__be32 ancillary_data;
+	const __u32 index = 0;
+	__u32 gob_plen;
+	int ret;
+
+	/* get access to scratch area */
+	sarea = bpf_map_lookup_elem(&ioam6_scratch_map, &index);
+	if (!sarea) {
+		bpf_printk("Cannot access to scratch area");
+		goto out;
+	}
+	h = (struct gob *)sarea->data;
+
+	/* read the gob header */
+	ret = bpf_ioam6_trace_gob_load_bytes(skb, 0, h, sizeof(h->gob));
+	if (ret) {
+		bpf_printk("Cannot read the GOB Header");
+		goto out;
+	}
+
+	/* eval GOB payload len, and read from the beginning of the payload */
+	gob_plen = h->gob.hbl.len * 4;
+	if (gob_plen > sizeof(sarea->data) - sizeof(h->gob) ||
+	    gob_plen > sizeof(h->data)) {
+		bpf_printk("No space for reading the whole GOB");
+		goto out;
+	}
+
+	/* read the full GOB payload */
+	ret = bpf_ioam6_trace_gob_load_bytes(skb, offsetof(struct gob, data),
+					     h->data, gob_plen);
+	if (ret) {
+		bpf_printk("Cannot read bytes from GOB payload");
+		goto out;
+	}
+
+	ocounter = counter = bpf_ntohl(h->counter);
+	++counter;
+	h->counter = bpf_htonl(counter);
+
+	ret = bpf_ioam6_trace_gob_store_bytes(skb,
+					      offsetof(struct gob, data),
+					      h->data, sizeof(h->counter));
+	if (ret) {
+		bpf_printk("Cannot write bytes in GOB Payload");
+		goto out;
+	}
+
+	ancillary_data = bpf_htonl(0xcafec001);
+	ret = bpf_ioam6_trace_gob_store_bytes(skb,
+					      offsetofend(struct gob, counter),
+					      &ancillary_data,
+					      sizeof(ancillary_data));
+	if (ret) {
+		bpf_printk("cannot write ancillary data");
+	}
+
+	bpf_printk("IOAM PTO GOB (PLen=%d) read before=%d, after=%d",
+		   gob_plen, ocounter, counter);
+out:
+	return BPF_OK;
+#undef GOB_PAYLOAD
 }
 
 char _license[] SEC("license") = "Dual BSD/GPL";

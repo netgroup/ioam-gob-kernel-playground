@@ -13,41 +13,55 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Install any packages or dependencies here
 RUN apt-get install -y \
-	tmux \
-	curl \
-	wget \
-	lsb-release \
-	software-properties-common \
-	pkg-config \
+	autotools-dev \
+	bc \
 	binutils-dev \
-	libcap-dev \
-	libelf-dev \
-	gcc-multilib \
-	gpg \
-	vim \
-	universal-ctags \
-	git \
-	g++ \
+	build-essential \
+	bison \
 	cmake \
-	libssl-dev \
-	libcurl4-openssl-dev \
-	libcap-ng-dev \
-	systemd \
+	debhelper \
+	debhelper-compat \
+	debootstrap \
+	fakeroot \
+	flex \
+	gcc-multilib \
+	g++ \
+	gdb \
+	gpg \
+	git \
 	init \
 	iproute2 \
 	iputils-ping \
-	tcpdump \
+	kmod \
+	libcap-dev \
+	libcap-ng-dev \
+	libcurl4-openssl-dev \
+	libdw-dev \
+	libelf-dev \
+	libgcrypt20-dev \
+	liblz4-dev \
+	libmnl-dev \
+	libnl-3-dev \
+	libnl-nf-3-dev \
+	libnl-route-3-dev \
+	libpcre2-dev \
+	libssl-dev \
+	libudev-dev \
+	lsb-release \
 	net-tools \
-	fakeroot \
-	build-essential \
-	ncurses-dev \
-	xz-utils \
-	bc \
-	flex \
-	bison \
 	pahole \
+	pkg-config \
 	qemu-system-x86 \
-	debootstrap
+	rsync \
+	sparse \
+	systemd \
+	tmux \
+	tcpdump \
+	universal-ctags \
+	vim \
+	wget \
+	xz-utils \
+	zlib1g-dev
 
 # install latest llvm for ebpf
 RUN mkdir -p /opt/llvm && cd /opt/llvm && \

@@ -8,14 +8,14 @@ ARCH := $(shell uname -m)
 
 .PHONY: config kbuild kmodule install
 
-all: config kbuild kmodule install
+all: kbuild install
 
 config:
 	@echo "Entering configs folder..."
 	@if [ ! -f linux/.config ]; then \
 		echo "Copying config file..."; \
 		pushd configs && \
-			cp -av kernel_608_net-dev.config ../linux/.config && \
+			cp -av kernel_618-rc1_net-next-dev.config ../linux/.config && \
 		popd; \
 		pushd linux && \
 			make -j$(NUM_JOBS) olddefconfig && \
@@ -40,6 +40,6 @@ install:
 		echo "Kernel already soft-linked in VM folder. Skipping linking."; \
 	fi
 
-kmodule:
-	@echo "Building out-of-tree kernel module with $(NUM_JOBS) parallel jobs..."
-	cd modules && make all
+#kmodule:
+#	@echo "Building out-of-tree kernel module with $(NUM_JOBS) parallel jobs..."
+#	cd modules && make all

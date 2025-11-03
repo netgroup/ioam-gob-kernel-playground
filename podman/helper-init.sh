@@ -14,7 +14,8 @@ for module in $(git submodule status | awk '{print $2}'); do
 		#However, it omits the full commit history, limiting access to
 		#historical data and some Git functionalities that rely on
 		#complete history.
-		git submodule update --init --recursive --depth 1 "${module}"
+		#git submodule update --init --recursive --depth 1 "${module}"
+		git submodule update --init --recursive "${module}"
 	else
 		git submodule update --init --recursive "${module}"
 	fi

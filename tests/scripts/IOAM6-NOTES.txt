@@ -1,0 +1,25 @@
+=== V1 ===
+alias ip=iproute2/iproute2-next/ip/ip
+ip ioam gobschema del 77 &>/dev/null
+ip ioam gobschema add 77 object /mnt/shared/netprog.bpf.o section ioam6_cnt
+ip ioam namespace set 123 gobschema 77
+==========
+
+=== V2 ===
+alias ip=iproute2/iproute2-next/ip/ip
+ip ioam gobschema del 77 &>/dev/null
+ip ioam gobschema add 77 object /mnt/shared/netprog.bpf.o section ioam6_cntv2
+ip ioam namespace set 123 gobschema 77
+==========
+
+=== V3 ===
+alias ip=iproute2/iproute2-next/ip/ip
+ip ioam gobschema del 77 &>/dev/null
+ip ioam gobschema add 77 object /mnt/shared/netprog.bpf.o section ioam6_cntv3
+ip ioam namespace set 123 gobschema 77
+==========
+
+=== ENABLE GOB ===
+ip -6 route add db22::22/64 encap ioam6 mode encap tundst fc00::d6 \
+	trace prealloc type 0x800000 ns 123 size 12 gobsize 8 dev athos-porthos
+
