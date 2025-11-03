@@ -29,6 +29,7 @@ RUN apt-get install -y \
 	gdb \
 	gpg \
 	git \
+	gnupg \
 	init \
 	iproute2 \
 	iputils-ping \
@@ -55,6 +56,7 @@ RUN apt-get install -y \
 	rsync \
 	sparse \
 	systemd \
+	software-properties-common \
 	tmux \
 	tcpdump \
 	universal-ctags \
