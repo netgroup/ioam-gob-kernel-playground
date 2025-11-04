@@ -25,7 +25,7 @@ done
 #
 # This builds a minimal rootfs to be used by the VM
 pushd tests/vm
-./create-image.sh
+./create-image.sh -f full
 popd
 
 # Kernel setup
