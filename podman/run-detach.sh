@@ -13,4 +13,5 @@ podman run \
 	--privileged \
 	--name kernel-builder \
 	-v ../:/opt/kernel-playground \
+	-v $HOME/.ssh:/root/.ssh:ro \
 	-it localhost/kernel-builder
