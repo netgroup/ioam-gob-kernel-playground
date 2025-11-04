@@ -7,6 +7,7 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 podman run \
+	-it \
 	--privileged \
 	--rm \
 	--replace \
