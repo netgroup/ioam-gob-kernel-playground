@@ -36,12 +36,14 @@
 set -euo pipefail
 set -x
 
+readonly SESSION="ioam6"
+
 #-------------------------------------------------------------------
 # 1. Clean-up - delete namespaces, veth interfaces and tmux session
 #-------------------------------------------------------------------
 cleanup() {
     echo "=== Cleaning up network namespaces, veth devices and tmux session ==="
-    tmux kill-session -t nettopo 2>/dev/null || true
+    tmux kill-session -t "${SESSION}" 2>/dev/null || true
 
     for ns in alfa athos porthos aramis beta; do
         ip netns delete "$ns" 2>/dev/null || true
@@ -55,6 +57,9 @@ cleanup() {
         ip link del "$dev" 2>/dev/null || true
     done
 }
+
+# Do a cleanup before running the script, ALWAYS
+cleanup
 trap cleanup EXIT
 
 #-------------------------------------------------------------------
@@ -187,24 +192,18 @@ ip netns exec beta ip -6 route add default via db22::1 dev beta-aramis
 #-------------------------------------------------------------------
 # 11. Start tmux (one window per node, mouse enabled)
 #-------------------------------------------------------------------
-SESSION="nettopo"
 
 # Create a detached tmux session; first window will be called "alfa".
-tmux new-session -d -s "$SESSION" -n "alfa"
+tmux new-session -d -s "${SESSION}" -n "alfa" ip netns exec alfa bash
+
+# Populate the windows each runs a shell inside its own namespace
+tmux new-window -t "${SESSION}" -n "athos" ip netns exec athos bash
+tmux new-window -t "${SESSION}" -n "porthos" ip netns exec porthos bash
+tmux new-window -t "${SESSION}" -n "aramis" ip netns exec aramis bash
+tmux new-window -t "${SESSION}" -n "beta" ip netns exec beta bash
 
 # Enable mouse support for the whole session.
 tmux set -g mouse on
 
-# Populate the windows – each runs a shell inside its own namespace.
-tmux send-keys -t "${SESSION}:0" "ip netns exec alfa bash"   C-m
-tmux new-window -t "${SESSION}:" -n "athos"
-tmux send-keys -t "${SESSION}:1" "ip netns exec athos bash" C-m
-tmux new-window -t "${SESSION}:" -n "porthos"
-tmux send-keys -t "${SESSION}:2" "ip netns exec porthos bash" C-m
-tmux new-window -t "${SESSION}:" -n "aramis"
-tmux send-keys -t "${SESSION}:3" "ip netns exec aramis bash" C-m
-tmux new-window -t "${SESSION}:" -n "beta"
-tmux send-keys -t "${SESSION}:4" "ip netns exec beta bash" C-m
-
-# Attach to the session – you start in window 0 (alfa).
+# Attach to the session you start in window 0 (alfa)
 tmux attach -t "$SESSION"
