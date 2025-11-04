@@ -13,6 +13,6 @@ podman run \
 	--replace \
 	--name kernel-builder \
 	-v ../:/opt/kernel-playground \
-	-v $HOME/.ssh:/root/.ssh:ro \
+	-v $HOME/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro \
 	-t localhost/kernel-builder \
 	bash -c "cd /opt/kernel-playground/podman && ./helper-init.sh"
