@@ -8,7 +8,7 @@ ARCH := $(shell uname -m)
 
 .PHONY: config kbuild kmodule install
 
-all: kbuild install
+all: config kbuild install
 
 config:
 	@echo "Entering configs folder..."
