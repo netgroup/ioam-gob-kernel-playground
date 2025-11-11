@@ -59,6 +59,7 @@ RUN apt-get install -y \
 	software-properties-common \
 	tmux \
 	tcpdump \
+	tree \
 	universal-ctags \
 	vim \
 	wget \
