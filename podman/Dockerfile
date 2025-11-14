@@ -49,6 +49,7 @@ RUN apt-get install -y \
 	libssl-dev \
 	libudev-dev \
 	lsb-release \
+	lz4 \
 	net-tools \
 	pahole \
 	pkg-config \
