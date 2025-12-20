@@ -7,12 +7,83 @@
 //#include <linux/ipv6.h>
 #include <string.h>
 
-#define ETH_P_IPV6		0x86DD	/* IPv6 */
-#define IPPROTO_ICMPV6		58	/* ICMPv6 */
+/* The BPFTOOL_IOAM6_GOB_SEC macro determines whether the ioam6_gob eBPF
+ * programs are loaded with bpftool and later referenced by the `ip ioam`
+ * command.  When the macro is defined (or set to 1) the following
+ * behavior occurs:
+ *
+ * 1) bpftool scans the object file for a section declared as
+ *    SEC("ioam6_gob") and loads the program whose C function name matches
+ *    the required eBPF context.  The program is then made available either
+ *    by its numeric ID or by a pinned object in the BPF filesystem
+ *    (bpffs).
+ *
+ * 2) iproute2 does not use the function name; instead it selects a specific
+ *    ioam6_gob variant by the section name.  Each variant therefore occupies
+ *    its own dedicated section, allowing iproute2 to address the correct
+ *    program even when multiple ioam6_gob programs are present.
+ *
+ * In summary, defining BPFTOOL_IOAM6_GOB_SEC enables a dual-lookup
+ * mechanism: bpftool loads the program via the function name inside the
+ * "ioam6_gob" section, while iproute2 chooses the desired variant by
+ * referencing that section directly.
+ */
 
+
+//#define BPFTOOL_IOAM6_GOB_SEC	1
+
+#define IPROUTE2_IOAM6_GOB_SEC 1
+
+/* ---------------------------------------------------------------
+ * Helper for selecting the eBPF program section.
+ *
+ * Requirements:
+ *   - Exactly one of BPFTOOL_IOAM6_GOB_SEC or IPROUTE2_IOAM6_GOB_SEC
+ *     must be defined at compile time.
+ *   - If BPFTOOL_IOAM6_GOB_SEC is defined the program is placed in
+ *     the fixed section "ioam6_gob".
+ *   - If IPROUTE2_IOAM6_GOB_SEC is defined the program is placed in
+ *     the section supplied to CSEC().
+ *
+ * Usage example:
+ *
+ *     CSEC("my_custom_section")
+ *     int my_prog(struct bpf_ioam6_trace_gob_ctx *ctx)
+ *     {
+ *         return 0;
+ *     }
+ *
+ * --------------------------------------------------------------- */
+
+/* The kernel provides the SEC() macro (usually from <bpf/bpf_helpers.h>).
+ * We require it to be visible before this header is included. */
+#ifndef SEC
+#error "SEC() macro is required - include <bpf/bpf_helpers.h> first"
+#endif
+
+/* Compile-time sanity checks: exactly one of the two control macros
+ * must be defined. */
+#if defined(BPFTOOL_IOAM6_GOB_SEC) && defined(IPROUTE2_IOAM6_GOB_SEC)
+#error "Both BPFTOOL_IOAM6_GOB_SEC and IPROUTE2_IOAM6_GOB_SEC are defined; they must be mutually exclusive"
+#elif !defined(BPFTOOL_IOAM6_GOB_SEC) && !defined(IPROUTE2_IOAM6_GOB_SEC)
+#error "Neither BPFTOOL_IOAM6_GOB_SEC nor IPROUTE2_IOAM6_GOB_SEC is defined; exactly one must be defined"
+#endif
+
+/* Definition of CSEC():
+ *   - BPFTOOL_IOAM6_GOB_SEC => always SEC("ioam6_gob")
+ *   - IPROUTE2_IOAM6_GOB_SEC => SEC(<argument>) */
+#ifdef BPFTOOL_IOAM6_GOB_SEC
+#define CSEC(x)  SEC("ioam6_gob")
+#else /* IPROUTE2_IOAM6_GOB_SEC is defined */
+#define CSEC(x)  SEC(x)
+#endif
 
 #define likely(x)       __builtin_expect(!!(x), 1)
 #define unlikely(x)     __builtin_expect(!!(x), 0)
+
+
+#define ETH_P_IPV6		0x86DD	/* IPv6 */
+#define IPPROTO_ICMPV6		58	/* ICMPv6 */
 
 /* Byte-count bounds check; check if current pointer at @start + @off of header
  * is after @end.
@@ -48,6 +119,7 @@
 #define offsetofend(TYPE, MEMBER) \
 	(offsetof(TYPE, MEMBER)	+ sizeof_field(TYPE, MEMBER))
 
+#if 0
 struct proc_stats {
 	__u64 drop;
 };
@@ -241,750 +313,282 @@ int test_ioam6_dum1(struct __sk_buff *skb)
 out:
 	return BPF_OK;
 }
-
-int bpf_ioam6_trace_gob_store_bytes(struct __sk_buff *,
-				    u32, const void *, u32) __ksym;
-
-SEC("ioam6_cntv1")
-int test_ioam6_cntv1(struct __sk_buff *skb)
-{
-#define GOB_PAYLOAD 8
-	struct trace_hdr {
-		struct ioam6_trace_hdr trace;
-		struct ioam6_trace_gob_hdr gob;
-		__u8 data[GOB_PAYLOAD];
-	} hdr = { 0, };
-	__u32 counter, ocounter;
-	__u32 trace_off;
-	int ret;
-
-	/* offset starts from skb->data which is network (IPv6) aligned */
-	trace_off = sizeof(struct ipv6hdr) + sizeof(struct ioam6_lwt_encap) -
-                    sizeof(struct ioam6_trace_hdr);
-	ret = bpf_skb_load_bytes(skb, trace_off, &hdr, sizeof(hdr));
-	if (ret) {
-		bpf_printk("Cannot read the IOAM trace headers");
-		goto out;
-	}
-
-	if (!hdr.trace.type.gob)
-		/* no gob header found */
-		goto out;
-
-	ocounter = counter = bpf_ntohl(*(__be32 *)hdr.data);
-	++counter;
-	*(__be32 *)hdr.data = bpf_htonl(counter);
-
-	ret = bpf_ioam6_trace_gob_store_bytes(skb, 4, hdr.data,
-					      sizeof(hdr.data));
-	if (ret) {
-		bpf_printk("Cannot write on GOB Payload");
-		goto out;
-	}
-
-	hdr.data[4] = 0xde;
-	hdr.data[5] = 0xad;
-	hdr.data[6] = 0xbe;
-	hdr.data[7] = 0xef;
-
-	ret = bpf_ioam6_trace_gob_store_bytes(skb, 8, hdr.data + 4, 4);
-	if (!ret) {
-		bpf_printk("ancillary data written");
-	}
-
-	bpf_printk("IOAM PTO GOB read before=%d, after=%d",
-		   ocounter, counter);
-out:
-	return BPF_OK;
-#undef GOB_PAYLOAD
-}
-
-int bpf_ioam6_trace_gob_load_bytes(struct __sk_buff *, u32, void *, u32) __ksym;
-
-/*
- * EIP simple counter example
- *
- * init EIP in the GOB
- * add LTV header:
- * 	extended code: 10
- * 	data len: 0 (total is 4 octects)
- * 	type: 666 (whatever)
- * init counter field (1 octet) to 0
- */
-
-#define DISABLE_BPF_PRINTK 0
-
-#if DISABLE_BPF_PRINTK == 1
-#define bpf_log_printk(fmt, ...) (0)
-#else
-#define bpf_log_printk(...) bpf_printk(__VA_ARGS__)
 #endif
-
-// double extended (c) and 2 octects long (2)
-#define LTV_LEN 0xc2
-#define LTV_TYPE 0x666
-#define ID1 1
-#define ID2 2
-#define ETH_HDR_LEN 14
-
-/* node will increment next after writing at (next*4) Bytes in the stack */
-
-SEC("ioam6_eip_init")
-int test_ioam6_eip_init(struct __sk_buff *skb)
-{
-#define GOB_PAYLOAD 12
-	struct gob {
-		struct ioam6_trace_gob_hdr gob;
-		__u8 data[GOB_PAYLOAD];
-	} __attribute__((packed)) hdr = { 0, };
-
-	void* data_end;
-	void* data;
-	struct ipv6hdr *ipv6_h;
-	__u32 id = ID1;
-	__u8 ttl;
-	long ret;
-
-	/* get TTL from IPv6 packet */
-	ret = bpf_skb_pull_data(skb, sizeof(*ipv6_h));
-	if (ret < 0) {
-		bpf_log_printk("could not pull data");
-		goto out;
-	}
-
-	data_end = (void *)(unsigned long)skb->data_end;
-	data = (void *)(unsigned long)skb->data;
-	/* check if packet is long enough for ipv6 */
-	if (data + sizeof(*ipv6_h) > data_end) {
-		bpf_log_printk("pkt too short for IPv6");
-		goto out;
-	}
-	ipv6_h = data;
-	ttl = ipv6_h->hop_limit;
-	bpf_log_printk("ttl: %d", ttl);
-
-	/* init EIP header and set TTL and ID */
-	ret = bpf_ioam6_trace_gob_load_bytes(skb, 0, &hdr, sizeof(hdr));
-	if (ret) {
-		bpf_printk("Cannot read bytes from GOB");
-		goto out;
-	}
-	hdr.data[0] = LTV_LEN;
-	*(__be16 *)&hdr.data[1] = bpf_htons(LTV_TYPE);
-	hdr.data[3] = 1; // because it is being populated
-	hdr.data[4] = ttl;
-	hdr.data[7] = id & 0xff;
-	hdr.data[6] = (id >> 8) & 0xff;
-	hdr.data[5] = (id >> 16) & 0xff;
-
-	ret = bpf_ioam6_trace_gob_store_bytes(skb, 4, hdr.data,
-                                              sizeof(hdr.data));
-	if (ret) {
-		bpf_printk("Cannot write on GOB Payload");
-		goto out;
-	}
-
-out:
-	bpf_log_printk("init out\n");
-	return BPF_OK;
-#undef GOB_PAYLOAD
-}
-
-/* giulio originale, andrea ha tolto i printk sul trace pipe */
-SEC("ioam6_eip_mid")
-int test_ioam6_eip_mid(struct __sk_buff *skb)
-{
-#define GOB_PAYLOAD 12
-	struct gob {
-		struct ioam6_trace_gob_hdr gob;
-		__u8 data[GOB_PAYLOAD];
-	} __attribute__((packed)) hdr = { 0, };
-
-	struct ipv6hdr *ipv6_h;
-	void *data_end;
-	__u32 id = ID2;
-	__u8 ttl, next;
-	__be16 type;
-	void*data;
-	long ret;
-
-	/* get TTL from IPv6 packet */
-	ret = bpf_skb_pull_data(skb, sizeof(*ipv6_h));
-	if (ret < 0) {
-		bpf_log_printk("could not pull data");
-		goto out;
-	}
-
-	data_end = (void *)(unsigned long)skb->data_end;
-	data = (void *)(unsigned long)skb->data;
-	/* check if packet is long enough for ipv6 */
-	if (data + sizeof(*ipv6_h) > data_end) {
-		bpf_log_printk("pkt too short for IPv6");
-		goto out;
-	}
-	ipv6_h = data;
-	ttl = ipv6_h->hop_limit;
-	bpf_log_printk("ttl: %d", ttl);
-
-	/* process EIP header and set TTL and ID */
-	ret = bpf_ioam6_trace_gob_load_bytes(skb, 0, &hdr, sizeof(hdr));
-	if (ret) {
-		bpf_printk("Cannot read bytes from GOB");
-		goto out;
-	}
-	/* check LTV type */
-	type = *(__be16 *)&hdr.data[1];
-	if (bpf_ntohs(type) != LTV_TYPE) {
-		bpf_printk("wrong LTV type: %d", type);
-		goto out;
-	}
-	next = hdr.data[3];
-	if (next > 1) {
-		bpf_printk("LTV stack full, cannot add data");
-		goto out;
-	}
-	hdr.data[3] = next + 1;
-	hdr.data[4] = ttl;
-	hdr.data[7] = id & 0xff;
-	hdr.data[6] = (id >> 8) & 0xff;
-	hdr.data[5] = (id >> 16) & 0xff;
-
-	ret = bpf_ioam6_trace_gob_store_bytes(skb, 4, hdr.data,
-					      sizeof(hdr.data));
-	if (ret) {
-		bpf_printk("Cannot write on GOB Payload");
-		goto out;
-	}
-
-out:
-	bpf_log_printk("init out\n");
-	return BPF_OK;
-#undef GOB_PAYLOAD
-}
-
-SEC("ioam6_gob_eip_idhoplim_init")
-int test_ioam6_gob_eip_idhoplim_init(struct __sk_buff *skb)
-{
-#define GOB_PAYLOAD 8
-	struct {
-		union {
-			struct {
-				__be16 type;
-				__u8 len;
-				__u8 next;
-				__be32 ttlhoplim;
-			};
-			__u8 data[GOB_PAYLOAD];
-		};
-	} __attribute__((packed)) hdr;
-	struct ipv6hdr *ipv6_h;
-	__u32 id = ID1;
-	void *data_end;
-	void *data;
-	__u8 ttl;
-	long ret;
-
-	data_end = (void *)(unsigned long)skb->data_end;
-	data = (void *)(unsigned long)skb->data;
-	/* check if packet is long enough for ipv6 */
-	if (data + sizeof(*ipv6_h) > data_end) {
-		bpf_log_printk("pkt too short for IPv6");
-		goto out;
-	}
-
-	ipv6_h = data;
-	ttl = ipv6_h->hop_limit;
-	bpf_log_printk("id: %d", id);
-	bpf_log_printk("ttl: %d", ttl);
-
-	/* init EIP header and set TTL and ID */
-	ret = bpf_ioam6_trace_gob_load_bytes(skb, 4, &hdr, sizeof(hdr));
-	if (ret) {
-		bpf_printk("Cannot read bytes from GOB");
-		goto out;
-	}
-
-	hdr.type = bpf_htons(LTV_TYPE);
-	hdr.len = LTV_LEN;
-	hdr.next = 1;
-	hdr.ttlhoplim = bpf_htonl((ttl << 24) | (id & 0x00ffffffu));
-
-	ret = bpf_ioam6_trace_gob_store_bytes(skb, 4, &hdr, sizeof(hdr));
-	if (ret) {
-                bpf_printk("Cannot write on GOB Payload");
-                goto out;
-        }
-out:
-	bpf_log_printk("init out\n");
-	return BPF_OK;
-#undef GOB_PAYLOAD
-}
-
-SEC("ioam6_gob_eip_idhoplim")
-int test_ioam6_gob_eip_idhoplim(struct __sk_buff *skb)
-{
-#define GOB_PAYLOAD 8
-	struct {
-		union {
-			struct {
-				__u16 type;
-				__u8 len;
-				__u8 next;
-				__be32 ttlhoplim;
-			};
-			__u8 data[GOB_PAYLOAD];
-		};
-	} __attribute__((packed)) hdr;
-
-	struct ipv6hdr *ipv6_h;
-	void *data_end;
-	__u32 id = ID2;
-	__u8 ttl, next;
-	__be16 type;
-	void *data;
-	long ret;
-
-	data_end = (void *)(unsigned long)skb->data_end;
-	data = (void *)(unsigned long)skb->data;
-	/* check if packet is long enough for ipv6 */
-	if (unlikely(data + sizeof(*ipv6_h) > data_end)) {
-		bpf_log_printk("pkt too short for IPv6");
-		goto out;
-	}
-
-	ipv6_h = data;
-	ttl = ipv6_h->hop_limit;
-	bpf_log_printk("id: %d", id);
-	bpf_log_printk("ttl: %d", ttl);
-
-	/* process EIP header and set TTL and ID */
-	ret = bpf_ioam6_trace_gob_load_bytes(skb, 4, &hdr, sizeof(hdr));
-	if (unlikely(ret)) {
-		bpf_printk("Cannot read bytes from GOB");
-		goto out;
-	}
-	/* check LTV type */
-	type = bpf_ntohs(hdr.type);
-	if (unlikely(type != LTV_TYPE)) {
-		bpf_printk("wrong LTV type: %d", type);
-                goto out;
-	}
-	next = hdr.next++;
-	if (unlikely(next > 1)) {
-		bpf_printk("LTV stack full, cannot add data");
-                goto out;
-	}
-
-	hdr.ttlhoplim = bpf_htonl((ttl << 24) | (id & 0x00ffffffu));
-
-	ret = bpf_ioam6_trace_gob_store_bytes(skb, 4, &hdr, sizeof(hdr));
-	if (unlikely(ret)) {
-                bpf_printk("Cannot write on GOB Payload");
-                goto out;
-        }
-out:
-	bpf_log_printk("init out\n");
-	return BPF_OK;
-#undef GOB_PAYLOAD
-}
-
-SEC("ioam6_gob_eip_idhoplim_rraw")
-int test_ioam6_gob_eip_idhoplim_rraw(struct __sk_buff *skb)
-{
-#define GOB_PAYLOAD 8
-	struct {
-		union {
-			struct {
-				__u16 type;
-				__u8 len;
-				__u8 next;
-				__be32 ttlhoplim;
-			};
-			__u8 data[GOB_PAYLOAD];
-		};
-	} __attribute__((packed)) hdr;
-
-	struct ioam6_trace_gob_hdr *gob;
-	struct ipv6hdr *ipv6_h;
-	void *data_end;
-	__u32 id = ID2;
-	__u8 ttl, next;
-	__be16 type;
-	void *data;
-	long ret;
-
-	data_end = (void *)(unsigned long)skb->data_end;
-	data = (void *)(unsigned long)skb->data;
-	/* check if packet is long enough for ipv6 */
-	if (unlikely(data + sizeof(*ipv6_h) > data_end)) {
-		bpf_log_printk("pkt too short for IPv6");
-		goto out;
-	}
-
-	ipv6_h = data;
-	ttl = ipv6_h->hop_limit;
-	bpf_log_printk("id: %d", id);
-	bpf_log_printk("ttl: %d", ttl);
-
-	gob = (struct ioam6_trace_gob_hdr *)(data +
-					sizeof(struct ipv6hdr) +
-                                        sizeof(struct ipv6_opt_hdr) + 2 +
-                                        sizeof(struct ioam6_hdr) +
-					sizeof(struct ioam6_trace_hdr));
-	if (unlikely((void *)gob + sizeof(*gob) + sizeof(hdr) > data_end)) {
-		bpf_log_printk("pkt too short for GOB");
-		goto out;
-	}
-
-	/* cast to __u64 * to align to 8 bytes */
-	memcpy(&hdr, (__u64 *)((void *)gob + sizeof(*gob)), sizeof(hdr));
-
-	/* check LTV type */
-	type = bpf_ntohs(hdr.type);
-	if (unlikely(type != LTV_TYPE)) {
-		bpf_printk("wrong LTV type: %d", type);
-                goto out;
-	}
-	next = hdr.next++;
-	if (unlikely(next > 1)) {
-		bpf_printk("LTV stack full, cannot add data");
-                goto out;
-	}
-
-	hdr.ttlhoplim = bpf_htonl((ttl << 24) | (id & 0x00ffffffu));
-
-	ret = bpf_ioam6_trace_gob_store_bytes(skb, 4, &hdr, sizeof(hdr));
-	if (unlikely(ret)) {
-                bpf_printk("Cannot write on GOB Payload");
-                goto out;
-        }
-out:
-	bpf_log_printk("init out\n");
-	return BPF_OK;
-#undef GOB_PAYLOAD
-}
-
-SEC("ioam6_gob_nop")
-int test_ioam6_gob_nop(struct __sk_buff *skb)
-{
-	return BPF_OK;
-}
-
-SEC("ioam6_cntv2")
-int test_ioam6_cntv2(struct __sk_buff *skb)
-{
-#define GOB_PAYLOAD 4
-	struct gob {
-		struct ioam6_trace_gob_hdr gob;
-		__u8 data[GOB_PAYLOAD];
-	} __attribute__((packed)) hdr = { 0, };
-	__u8 counter = 0, ltv_len;
-	__u16 ltv_type;
-	__u32 gob_len;
-	int ret;
-
-	ret = bpf_ioam6_trace_gob_load_bytes(skb, 0, &hdr, sizeof(hdr));
-	if (ret) {
-		bpf_printk("Cannot read bytes from GOB");
-		goto out;
-	}
-
-	gob_len = (bpf_htonl(hdr.gob.hdr) >> 24) * 4 + sizeof(hdr.gob);
-	bpf_log_printk("gob len: %d", gob_len);
-
-	/* init EIP header and set counter to 0 */
-	ltv_len = 0x40;
-	ltv_type = 666;
-	hdr.data[0] = ltv_len;
-	*(__be16 *)&hdr.data[1] = bpf_htons(ltv_type);
-	hdr.data[3] = counter;
-
-	ltv_len = hdr.data[0];
-	bpf_log_printk("ltv len: 0x%02x", ltv_len);
-
-	ltv_type = bpf_htons(*(__be16 *)&hdr.data[1]);
-	bpf_log_printk("ltv type: %d", ltv_type);
-
-	counter = hdr.data[3];
-        bpf_log_printk("counter: %d", counter);
-
-	bpf_log_printk("hdr.data: 0x%08x", *(__u32 *)hdr.data);
-
-	ret = bpf_ioam6_trace_gob_store_bytes(skb, 4, hdr.data,
-                                              sizeof(hdr.data));
-        if (ret) {
-                bpf_printk("Cannot write on GOB Payload");
-                goto out;
-        }
-/*
-	ocounter = counter = bpf_ntohl(*(__be32 *)hdr.data);
-	++counter;
-	*(__be32 *)hdr.data = bpf_htonl(counter);
-
-	ret = bpf_ioam6_trace_gob_store_bytes(skb, 4, hdr.data,
-					      sizeof(hdr.data));
-	if (ret) {
-		bpf_printk("Cannot write on GOB Payload");
-		goto out;
-	}
-
-	hdr.data[4] = 0xde;
-	hdr.data[5] = 0xad;
-	hdr.data[6] = 0xbe;
-	hdr.data[7] = 0xef;
-
-	ret = bpf_ioam6_trace_gob_store_bytes(skb, 8, hdr.data + 4, 4);
-	if (ret) {
-		bpf_printk("cannot write ancillary data");
-	}
-
-	bpf_printk("IOAM PTO GOB (Len=%d)",
-		   gob_len);
-*/
-
-out:
-	bpf_log_printk("\n");
-	return BPF_OK;
-#undef GOB_PAYLOAD
-}
-
-SEC("ioam6_cntv2a")
-int test_ioam6_cntv2a(struct __sk_buff *skb)
-{
-#define GOB_PAYLOAD 4
-	struct gob {
-		struct ioam6_trace_gob_hdr gob;
-		__u8 data[GOB_PAYLOAD];
-	} __attribute__((packed)) hdr = { 0, };
-	__u8 counter = 0, ltv_len;
-	__u16 ltv_type;
-	__u32 gob_len;
-	int ret;
-
-	ret = bpf_ioam6_trace_gob_load_bytes(skb, 0, &hdr, sizeof(hdr));
-	if (ret) {
-		bpf_printk("Cannot read bytes from GOB");
-		goto out;
-	}
-
-	gob_len = (bpf_htonl(hdr.gob.hdr) >> 24) * 4 + sizeof(hdr.gob);
-	bpf_log_printk("gob len: %d", gob_len);
-
-	/* retrieve data from packet */
-	ltv_len = hdr.data[0];
-	bpf_log_printk("ltv len: 0x%02x", ltv_len);
-	if (ltv_len != 0x40) {
-		bpf_log_printk("unknown ltv length");
-                goto out;
-	}
-
-	ltv_type = bpf_htons(*(__be16 *)&hdr.data[1]);
-	bpf_log_printk("ltv type: %d", ltv_type);
-	if (ltv_type != 666) {
-                bpf_log_printk("unknown ltv type");
-                goto out;
-        }
-
-	counter = hdr.data[3];
-        bpf_log_printk("previous counter: %d", counter);
-	/* increment counter and rewrite it into hdr.data */
-	counter++;
-	bpf_log_printk("new counter: %d", counter);
-	hdr.data[3] = counter;
-
-	bpf_log_printk("hdr.data: 0x%08x", *(__u32 *)hdr.data);
-
-	ret = bpf_ioam6_trace_gob_store_bytes(skb, 4, hdr.data,
-                                              sizeof(hdr.data));
-        if (ret) {
-                bpf_printk("Cannot write on GOB Payload");
-                goto out;
-        }
-out:
-	bpf_log_printk("\n");
-	return BPF_OK;
-#undef GOB_PAYLOAD
-}
-
-struct scratch {
-#define SCRATCH_AREA_SIZE 64
-	__u8 data[SCRATCH_AREA_SIZE];
-};
-
-struct {
-	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
-	__type(key, __u32);
-	__type(value, struct scratch);
-	__uint(max_entries, 1);
-} ioam6_scratch_map SEC(".maps");
-
-SEC("ioam6_cntv3")
-int test_ioam6_cntv3(struct __sk_buff *skb)
-{
-#define GOB_PAYLOAD 8
-	struct gob {
-		struct ioam6_trace_gob_hdr gob;
-		/* payload data */
-		union {
-			__be32 counter;
-			__u8 data[GOB_PAYLOAD];
-		};
-	} __attribute__((packed)) *h;
-	struct scratch *sarea = NULL;
-	__u32 counter, ocounter;
-	__be32 ancillary_data;
-	const __u32 index = 0;
-	__u32 gob_plen;
-	int ret;
-
-	/* get access to scratch area */
-	sarea = bpf_map_lookup_elem(&ioam6_scratch_map, &index);
-	if (!sarea) {
-		bpf_printk("Cannot access to scratch area");
-		goto out;
-	}
-	h = (struct gob *)sarea->data;
-
-	/* read the gob header */
-	ret = bpf_ioam6_trace_gob_load_bytes(skb, 0, h, sizeof(h->gob));
-	if (ret) {
-		bpf_printk("Cannot read the GOB Header");
-		goto out;
-	}
-
-	/* eval GOB payload len, and read from the beginning of the payload */
-	gob_plen = h->gob.hbl.len * 4;
-	if (gob_plen > sizeof(sarea->data) - sizeof(h->gob) ||
-	    gob_plen > sizeof(h->data)) {
-		bpf_printk("No space for reading the whole GOB");
-		goto out;
-	}
-
-	/* read the full GOB payload */
-	ret = bpf_ioam6_trace_gob_load_bytes(skb, offsetof(struct gob, data),
-					     h->data, gob_plen);
-	if (ret) {
-		bpf_printk("Cannot read bytes from GOB payload");
-		goto out;
-	}
-
-	ocounter = counter = bpf_ntohl(h->counter);
-	++counter;
-	h->counter = bpf_htonl(counter);
-
-	ret = bpf_ioam6_trace_gob_store_bytes(skb,
-					      offsetof(struct gob, data),
-					      h->data, sizeof(h->counter));
-	if (ret) {
-		bpf_printk("Cannot write bytes in GOB Payload");
-		goto out;
-	}
-
-	ancillary_data = bpf_htonl(0xcafec001);
-	ret = bpf_ioam6_trace_gob_store_bytes(skb,
-					      offsetofend(struct gob, counter),
-					      &ancillary_data,
-					      sizeof(ancillary_data));
-	if (ret) {
-		bpf_printk("cannot write ancillary data");
-	}
-
-	bpf_printk("IOAM PTO GOB (PLen=%d) read before=%d, after=%d",
-		   gob_plen, ocounter, counter);
-out:
-	return BPF_OK;
-#undef GOB_PAYLOAD
-}
-
-SEC("ioam6_cntv4")
-int ioam6_gob_counter(struct __sk_buff *skb)
-{
-	struct {
-		struct ioam6_trace_gob_hdr gob;
-		__be32 counter;
-	} __attribute__((packed)) hdr;
-	__u32 counter;
-
-	/* read the whole GOB header and 4 bytes of payload, if possibile */
-	if (bpf_ioam6_trace_gob_load_bytes(skb, 0, &hdr, sizeof(hdr))) {
-		bpf_printk("cannot read GOB");
-		goto out;
-	}
-
-	counter = bpf_ntohl(hdr.counter);
-	++counter;
-	hdr.counter = bpf_htonl(counter);
-
-	/* write only the counter into the GOB payload */
-	if (bpf_ioam6_trace_gob_store_bytes(skb, sizeof(hdr.gob),
-					   &hdr.counter, sizeof(counter)))
-		bpf_printk("cannot update counter in GOB payload");
-out:
-	return BPF_OK;
-}
 
 int bpf_dynptr_from_skb(struct __sk_buff *skb, __u64 flags,
 			struct bpf_dynptr *ptr__uninit) __ksym;
-void *bpf_dynptr_slice(const struct bpf_dynptr *ptr,
-		       uint32_t offset, void *buffer, uint32_t buffer__sz) __ksym;
-void *bpf_dynptr_slice_rdwr(const struct bpf_dynptr *ptr,
-			    uint32_t offset, void *buffer, uint32_t buffer__sz) __ksym;
 
-SEC("ioam6_dynptr")
-int test_ioam6_dynptr(struct __sk_buff *skb)
+void *bpf_dynptr_slice(const struct bpf_dynptr *ptr,
+		       uint32_t offset, void *buffer,
+		       uint32_t buffer__sz) __ksym;
+
+void *bpf_dynptr_slice_rdwr(const struct bpf_dynptr *ptr,
+			    uint32_t offset, void *buffer,
+			    uint32_t buffer__sz) __ksym;
+
+int bpf_ioam6_trace_gob_store_bytes(struct bpf_ioam6_trace_gob_ctx *, u32,
+				    const void *, u32) __ksym;
+
+int bpf_ioam6_trace_gob_load_bytes(struct bpf_ioam6_trace_gob_ctx *, u32,
+				   void *, u32) __ksym;
+
+CSEC("ioam6_newapi")
+int test_ioam6_newapi(struct bpf_ioam6_trace_gob_ctx *ctx)
 {
-	struct {
-		struct ipv6hdr pkt;
-		__u8 data[200];
-	} __attribute__((packed)) hdr, *phdr;
+	struct sk_buff *skb = ctx->skb;
+	struct ioam6_trace_gob_hdr gob;
+	__u32 schema = ctx->schema;
+	__u32 skb_len = skb->len;
+	struct ipv6hdr ip6h, *p;
 	struct bpf_dynptr ptr;
-	struct ipv6hdr *p;
-	u8 hop_limit;
+	__u32 len = ctx->len;
+	__u8 hoplim;
 	int ret;
 
-	if (skb->len < sizeof(*p)) {
-		bpf_printk("skb->len error");
-		goto out;
-	}
+	bpf_printk("GOB New API; GOB Len=%d, Schema=%d, SKB Len=%d",
+		   len, schema, skb_len);
 
-	ret = bpf_dynptr_from_skb(skb, 0, &ptr);
+	ret = bpf_dynptr_from_skb((struct __sk_buff *)skb, 0, &ptr);
 	if (ret) {
-		bpf_printk("bpf_dynptr_from_skb failed ret=%d", ret);
+		bpf_printk("bpf_dyn_ptr_from_skb error=%d", ret);
 		goto out;
 	}
 
-	phdr = bpf_dynptr_slice(&ptr, 0, &hdr, sizeof(hdr));
-	if (!phdr) {
+	p = bpf_dynptr_slice(&ptr, 0, &ip6h, sizeof(ip6h));
+	if (!p) {
 		bpf_printk("bpf_dynptr_slice error");
 		goto out;
 	}
 
-	hop_limit = phdr->pkt.hop_limit;
-	bpf_printk("IPv6 hop_limit=%d", hop_limit);
+	hoplim = p->hop_limit;
+	bpf_printk("GOB New API, IPv6 HopLimit=%d", hoplim);
+
+	ret = bpf_ioam6_trace_gob_load_bytes(ctx, 0, &gob, sizeof(gob));
+	if (ret) {
+		bpf_printk("Cannot read the gob through the gob_load_bytes=%d",
+			   ret);
+		goto out;
+	}
+
+	bpf_printk("Directly from GOB, Len=%d", sizeof(gob) + gob.hbl.len * 4);
 
 out:
 	return BPF_OK;
 }
 
-SEC("ioam6_denywrite")
-int test_ioam6_denywrite(struct __sk_buff *skb)
+CSEC("ioam6_newapi_rdwr")
+int test_ioam6_newapi_rdwr(struct bpf_ioam6_trace_gob_ctx *ctx)
 {
+	struct sk_buff *skb = ctx->skb;
+	struct ioam6_trace_gob_hdr gob;
+	__u32 schema = ctx->schema;
+	__u32 skb_len = skb->len;
+	struct ipv6hdr ip6h, *p;
 	void *data, *data_end;
-	struct ipv6hdr *ip6h;
-	u8 hop_limit;
+	struct bpf_dynptr ptr;
+	__u32 len = ctx->len;
+	__be32 counter;
+	__u8 hoplim;
+	__u32 cnt;
+	__be32 *v;
+	int ret;
 
-	data_end = (void *)(unsigned long)skb->data_end;
-	data = (void *)(unsigned long)skb->data;
-	if (data + sizeof(*ip6h) > data_end) {
-		bpf_printk("pkt too short for IPv6");
+	bpf_printk("GOB New API; GOB Len=%d, Schema=%d, SKB Len=%d",
+		   len, schema, skb_len);
+
+	ret = bpf_dynptr_from_skb((struct __sk_buff *)skb, 0, &ptr);
+	if (ret) {
+		bpf_printk("bpf_dyn_ptr_from_skb error=%d", ret);
 		goto out;
 	}
 
-	ip6h = data;
+	p = bpf_dynptr_slice(&ptr, 0, &ip6h, sizeof(ip6h));
+	if (!p) {
+		bpf_printk("bpf_dynptr_slice error");
+		goto out;
+	}
 
-	hop_limit = ip6h->hop_limit--;
-	bpf_printk("IPv6 hop_limit=%d", hop_limit);
+	hoplim = p->hop_limit;
+	bpf_printk("GOB New API, IPv6 HopLimit=%d", hoplim);
 
+	ret = bpf_ioam6_trace_gob_load_bytes(ctx, 0, &gob, sizeof(gob));
+	if (ret) {
+		bpf_printk("Cannot read the gob through the gob_load_bytes=%d",
+			   ret);
+		goto out;
+	}
+
+	bpf_printk("read from GOB using gob_load_bytes() helper, Len=%d",
+		   sizeof(gob) + gob.hbl.len * 4);
+
+	counter = bpf_htonl(17);
+	ret = bpf_ioam6_trace_gob_store_bytes(ctx, sizeof(gob), &counter,
+					      sizeof(counter));
+	if (ret) {
+		bpf_printk("Cannot write using gob_store_bytes() helper func=%d",
+			   ret);
+		goto out;
+	}
+
+	/* direct access to GOB payload */
+	data_end = ctx->data_end;
+	data = ctx->data;
+	if (data + sizeof(*v) > data_end) {
+		bpf_printk("cannot access in READ ctx->data");
+		goto out;
+	}
+
+	v = (__be32 *)data;
+	cnt = bpf_ntohl(*v);
+	++cnt;
+	*v = bpf_htonl(cnt);
+
+	bpf_printk("v is written, now v=%d", cnt);
+out:
+	return BPF_OK;
+}
+
+#define __gob_data_may_pull(start, size, end) \
+	__may_pull((start), (size), (end))
+
+struct ioam6_gob_stats {
+	__u32 counter;
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__type(key, __u32);
+	__type(value, struct ioam6_gob_stats);
+	__uint(max_entries, 1);
+} ioam6_gob_stats_map SEC(".maps");
+
+CSEC("ioam6_gobv2_cnt_map")
+int prog_ioam6_gobv2_cnt_map(struct bpf_ioam6_trace_gob_ctx *ctx)
+{
+	void *data_end = ctx->data_end;
+	struct ioam6_gob_stats *stats;
+	void *data = ctx->data;
+	const __u32 key = 0;
+	__u32 cnt;
+
+	if (!__gob_data_may_pull(data, sizeof(cnt), data_end))
+		goto out;
+
+	/* read the counter from GOB payload, convert in cpu long arch,
+	 * increase it and write it back to the packet in network-byte order.
+	 */
+	cnt = bpf_ntohl(*(__be32 *)data);
+	*(__be32 *)data = bpf_htonl(++cnt);
+
+	/* update the map jsut for testing */
+	stats = bpf_map_lookup_elem(&ioam6_gob_stats_map, &key);
+	if (!stats)
+		goto out;
+
+	/* XXX: possibily race condition but we don't care at the moment */
+	++stats->counter;
+out:
+	return BPF_OK;
+}
+
+CSEC("ioam6_gobv2_cnt")
+int prog_ioam6_gobv2_cnt(struct bpf_ioam6_trace_gob_ctx *ctx)
+{
+	void *data_end = ctx->data_end;
+	void *data = ctx->data;
+	__u32 cnt;
+
+	if (!__gob_data_may_pull(data, sizeof(cnt), data_end))
+		goto out;
+
+	/* read the counter from GOB payload, convert in cpu long arch,
+	 * increase it and write it back to the packet in network-byte order.
+	 */
+	cnt = bpf_ntohl(*(__be32 *)data);
+	bpf_printk("ioam6_gobv2_cnt: cnt before=%d", cnt);
+
+	*(__be32 *)data = bpf_htonl(++cnt);
+	bpf_printk("ioam6_gobv2_cnt: cnt after=%d", cnt);
+out:
+	return BPF_OK;
+}
+
+CSEC("ioam6_gobv2_dynptr")
+int prog_ioam6_gobv2_dynptr(struct bpf_ioam6_trace_gob_ctx *ctx)
+{
+	struct sk_buff *skb = ctx->skb;
+	struct ipv6hdr ip6h, *p;
+	struct bpf_dynptr ptr;
+	int ret;
+
+	ret = bpf_dynptr_from_skb((struct __sk_buff *)skb, 0, &ptr);
+	if (ret) {
+		bpf_printk("bpf_dynptr_from_skb error=%d", ret);
+		goto out;
+	}
+
+	p = bpf_dynptr_slice(&ptr, 0, &ip6h, sizeof(ip6h));
+	if (!p) {
+		bpf_printk("bpf_dynptr_slice error");
+		goto out;
+	}
+
+	bpf_printk("OK >>> bpf_dynptr_slice <<< OK");
+out:
+	return BPF_OK;
+}
+
+#if 0
+/* this program MUST NOT load properly!; the slice_rdwr which is forbidden and
+ * thus the program must be rejected.
+ */
+SEC("ioam6_gobv2_dynptr_rw")
+int prog_ioam6_gobv2_dynptr_rdrw(struct bpf_ioam6_trace_gob_ctx *ctx)
+{
+	struct sk_buff *skb = ctx->skb;
+	struct ipv6hdr ip6h, *p;
+	struct bpf_dynptr ptr;
+	int ret;
+
+	ret = bpf_dynptr_from_skb((struct __sk_buff *)skb, 0, &ptr);
+	if (ret) {
+		bpf_printk("bpf_dynptr_from_skb error=%d", ret);
+		goto out;
+	}
+
+	p = bpf_dynptr_slice_rdwr(&ptr, 0, &ip6h, sizeof(ip6h));
+	if (!p) {
+		bpf_printk("bpf_dynptr_slice_rdwr error");
+		goto out;
+	}
+
+	bpf_printk("!!!KO >>> bpf_dynptr_slice_rdwr <<< KO!!!");
+out:
+	return BPF_OK;
+}
+#endif
+
+CSEC("ioam6_gobv2_dynptr_write")
+int prog_ioam6_gobv2_dynptr_write(struct bpf_ioam6_trace_gob_ctx *ctx)
+{
+	struct sk_buff *skb = ctx->skb;
+	__u8 write_data[2] = { 1, 2 };
+	struct bpf_dynptr ptr;
+	int ret;
+
+	ret = bpf_dynptr_from_skb((struct __sk_buff *)skb, 0, &ptr);
+	if (ret) {
+		bpf_printk("bpf_dynptr_from_skb error=%d", ret);
+		goto out;
+	}
+
+	ret = bpf_dynptr_write(&ptr, 0, write_data, sizeof(write_data), 0);
+	if (ret) {
+		bpf_printk("bpf_dynptr_write error=%d", ret);
+		goto out;
+	}
+
+	bpf_printk("!!!KO >>> bpf_dynptr_write <<< KO!!!");
 out:
 	return BPF_OK;
 }

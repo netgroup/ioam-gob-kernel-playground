@@ -222,9 +222,9 @@ ip netns exec aramis sysctl -wq \
 #------------------------------------------------------------
 # 7. IOAM-namespace data (per-namespace)
 #------------------------------------------------------------
-ip netns exec athos   ip ioam namespace add "${NAMESPACE_ID}" data 0xdeadbee0
-ip netns exec porthos ip ioam namespace add "${NAMESPACE_ID}" data 0xdeadbee1
-ip netns exec aramis  ip ioam namespace add "${NAMESPACE_ID}" data 0xdeadbee2
+ip netns exec athos   ip ioam namespace add ${NAMESPACE_ID} data 0xdeadbee0
+ip netns exec porthos ip ioam namespace add ${NAMESPACE_ID} data 0xdeadbee1
+ip netns exec aramis  ip ioam namespace add ${NAMESPACE_ID} data 0xdeadbee2
 
 #------------------------------------------------------------
 # 8. Extra static routes (fc00::d6)
@@ -237,33 +237,33 @@ ip netns exec porthos ip -6 route add fc00::d6/128 via dc02::2 \
 #------------------------------------------------------------
 # 9. Gob-schema configuration for athos (section ioam6_cntv2)
 #------------------------------------------------------------
-ip netns exec athos "${P_IP}" ioam gobschema del "${GOBSCHEMA_ID}" &>/dev/null || true
-ip netns exec athos "${P_IP}" ioam gobschema add "${GOBSCHEMA_ID}" object "${BPF_OBJ}" \
-    section ioam6_gob_eip_idhoplim_init
-ip netns exec athos "${P_IP}" ioam namespace set "${NAMESPACE_ID}" gobschema "${GOBSCHEMA_ID}"
+ip netns exec athos "${P_IP}" ioam gobschema del ${GOBSCHEMA_ID} &>/dev/null || true
+ip netns exec athos "${P_IP}" ioam gobschema add ${GOBSCHEMA_ID} object "${BPF_OBJ}" \
+    section ioam6_gobv2_cnt
+ip netns exec athos "${P_IP}" ioam namespace set ${NAMESPACE_ID} gobschema ${GOBSCHEMA_ID}
 
 #------------------------------------------------------------
 # 10. Gob-schema configuration for porthos (section ioam6_cntv3)
 #------------------------------------------------------------
-ip netns exec porthos "${P_IP}" ioam gobschema del "${GOBSCHEMA_ID}" &>/dev/null || true
-ip netns exec porthos "${P_IP}" ioam gobschema add "${GOBSCHEMA_ID}" object "${BPF_OBJ}" \
-    section ioam6_gob_eip_idhoplim_rraw
-ip netns exec porthos "${P_IP}" ioam namespace set "${NAMESPACE_ID}" gobschema "${GOBSCHEMA_ID}"
+ip netns exec porthos "${P_IP}" ioam gobschema del ${GOBSCHEMA_ID} &>/dev/null || true
+ip netns exec porthos "${P_IP}" ioam gobschema add ${GOBSCHEMA_ID} object "${BPF_OBJ}" \
+    section ioam6_gobv2_cnt
+ip netns exec porthos "${P_IP}" ioam namespace set ${NAMESPACE_ID} gobschema ${GOBSCHEMA_ID}
 
 #------------------------------------------------------------
 # 11. Gob-schema configuration for aramis (section ioam6_cntv2)
 #------------------------------------------------------------
-ip netns exec aramis "${P_IP}" ioam gobschema del "${GOBSCHEMA_ID}" &>/dev/null || true
-ip netns exec aramis "${P_IP}" ioam gobschema add "${GOBSCHEMA_ID}" object "${BPF_OBJ}" \
-    section ioam6_cntv2
-ip netns exec aramis "${P_IP}" ioam namespace set "${NAMESPACE_ID}" gobschema "${GOBSCHEMA_ID}"
+ip netns exec aramis "${P_IP}" ioam gobschema del ${GOBSCHEMA_ID} &>/dev/null || true
+ip netns exec aramis "${P_IP}" ioam gobschema add ${GOBSCHEMA_ID} object "${BPF_OBJ}" \
+    section ioam6_gobv2_cnt
+ip netns exec aramis "${P_IP}" ioam namespace set ${NAMESPACE_ID} gobschema ${GOBSCHEMA_ID}
 
 #------------------------------------------------------------
-# 12. IOAM-6 encapsulation route on athos (custom ip + gobsize 16 (total 20))
+# 12. IOAM-6 encapsulation route on athos (custom ip + gobsize 8)
 #------------------------------------------------------------
 ip netns exec athos "${P_IP}" -6 route add db22::22/64 \
     encap ioam6 mode encap tundst fc00::d6 \
-    trace prealloc ns "${NAMESPACE_ID}" gobsize 16 dev athos-porthos
+    trace prealloc ns ${NAMESPACE_ID} gobsize 4 dev athos-porthos
 
 #------------------------------------------------------------
 # 13a. SRv6 End.DT6 legacy decap on aramis (table main)

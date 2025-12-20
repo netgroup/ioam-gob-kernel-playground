@@ -42998,6 +42998,14 @@ struct bpf_nf_ctx {
 	struct sk_buff *skb;
 };
 
+struct bpf_ioam6_trace_gob_ctx {
+	__u32 len;
+	__u32 schema;
+	void *data;
+	void *data_end;
+	struct sk_buff *skb;
+};
+
 struct bpf_ctx_convert {
 	struct __sk_buff BPF_PROG_TYPE_SOCKET_FILTER_prog;
 	struct sk_buff BPF_PROG_TYPE_SOCKET_FILTER_kern;
@@ -43059,8 +43067,8 @@ struct bpf_ctx_convert {
 	void *BPF_PROG_TYPE_SYSCALL_kern;
 	struct bpf_nf_ctx BPF_PROG_TYPE_NETFILTER_prog;
 	struct bpf_nf_ctx BPF_PROG_TYPE_NETFILTER_kern;
-	struct __sk_buff BPF_PROG_TYPE_IOAM6_GOB_prog;
-	struct sk_buff BPF_PROG_TYPE_IOAM6_GOB_kern;
+	struct bpf_ioam6_trace_gob_ctx BPF_PROG_TYPE_IOAM6_GOB_prog;
+	struct bpf_ioam6_trace_gob_ctx BPF_PROG_TYPE_IOAM6_GOB_kern;
 };
 
 struct bpf_devmap_val {
@@ -63283,7 +63291,7 @@ struct e1000_option {
 		} r;
 		struct {
 			int nr;
-			struct e1000_opt_list *p;
+			const struct e1000_opt_list *p;
 		} l;
 	} arg;
 };
@@ -63304,7 +63312,7 @@ struct e1000_option___2 {
 		} r;
 		struct {
 			int nr;
-			const struct e1000_opt_list *p;
+			struct e1000_opt_list *p;
 		} l;
 	} arg;
 };
@@ -79005,13 +79013,6 @@ struct io_zcrx_ifq {
 	long: 64;
 	long: 64;
 	long: 64;
-};
-
-struct ioam6_trace_hdr;
-
-struct ioam6_bpf_trace_state {
-	local_lock_t bh_lock;
-	struct ioam6_trace_hdr *trace;
 };
 
 struct ioam6_namespace;
@@ -134889,9 +134890,9 @@ typedef int (*initxattrs)(struct inode *, const struct xattr *, void *);
 
 typedef struct dentry *instantiate_t(struct dentry *, struct task_struct *, const void *);
 
-typedef int (*ioctl_fn)(struct file *, struct dm_ioctl *, size_t);
+typedef int (*ioctl_fn)(struct file *, struct autofs_sb_info *, struct autofs_dev_ioctl *);
 
-typedef int (*ioctl_fn___2)(struct file *, struct autofs_sb_info *, struct autofs_dev_ioctl *);
+typedef int (*ioctl_fn___2)(struct file *, struct dm_ioctl *, size_t);
 
 typedef void (*iomap_punch_t)(struct inode *, loff_t, loff_t, struct iomap *);
 
@@ -135031,13 +135032,13 @@ typedef int wait_bit_action_f(struct wait_bit_key *, int);
 
 typedef void (*xhci_get_quirks_t)(struct device *, struct xhci_hcd *);
 
-struct dmem_cgroup_region;
-
-struct nf_bridge_frag_data;
-
 struct ftrace_regs;
 
 struct hugetlb_cgroup;
+
+struct dmem_cgroup_region;
+
+struct nf_bridge_frag_data;
 
 struct bpf_iter;
 
