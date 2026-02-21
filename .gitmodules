@@ -11,7 +11,7 @@
 [submodule "kernel/linux"]
 	path = kernel/linux
 	url = git@github.com:skorpion17/srv6-dev-net-next.git
-	branch = ioam6-gob_v1
+	branch = ioam6-gob_v2
 [submodule "iproute2"]
 	path = iproute2
 	url = git@github.com:skorpion17/srv6-iproute2.git
