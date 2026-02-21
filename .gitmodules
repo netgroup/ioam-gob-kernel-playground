@@ -6,13 +6,13 @@
 	url = https://github.com/libbpf/bpftool
 [submodule "tests/vm"]
 	path = tests/vm
-	url = git@github.com:skorpion17/linux-kernel-qemu-setup.git
+	url = https://github.com/netgroup/ioam-gob-linux-kernel-qemu-setup.git
 	branch = ioam6-gob_v1
 [submodule "kernel/linux"]
 	path = kernel/linux
-	url = git@github.com:skorpion17/srv6-dev-net-next.git
+	url = https://github.com/netgroup/linux-kernel-dev.git
 	branch = ioam6-gob_v2
 [submodule "iproute2"]
 	path = iproute2
-	url = git@github.com:skorpion17/srv6-iproute2.git
+	url = https://github.com/netgroup/linux-iproute2-dev.git
 	branch = ioam6-gob_v1
