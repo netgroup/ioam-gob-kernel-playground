@@ -15,7 +15,7 @@ config:
 	@if [ ! -f linux/.config ]; then \
 		echo "Copying config file..."; \
 		pushd configs && \
-			cp -av kernel_618-rc1_net-next-dev.config ../linux/.config && \
+			cp -av kernel_618-rc1_net-next-dev-GOB_enabled.config ../linux/.config && \
 		popd; \
 		pushd linux && \
 			make -j$(NUM_JOBS) olddefconfig && \
