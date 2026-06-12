@@ -65,7 +65,8 @@ RUN apt-get install -y \
 	vim \
 	wget \
 	xz-utils \
-	zlib1g-dev
+	zlib1g-dev \
+	zstd
 
 # install latest llvm for ebpf
 RUN mkdir -p /opt/llvm && cd /opt/llvm && \
