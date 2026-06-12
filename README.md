@@ -146,7 +146,7 @@ The container is used for development. After running `setup-all.sh`, enter the c
 
 ```bash
 ./run-detach.sh
-podman exec -it kernel-builder bash
+podman exec -it ioam-kernel-builder bash
 cd /opt/kernel-playground
 ```
 

@@ -145,7 +145,7 @@ This will run the environment in the background, allowing you to interact with i
 To interact with the running container, execute:
 
 ```bash
-podman exec -it kernel-builder bash
+podman exec -it ioam-kernel-builder bash
 ```
 
 Once inside, navigate to the kernel playground directory:
