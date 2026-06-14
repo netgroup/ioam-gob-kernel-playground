@@ -16,3 +16,9 @@
 	path = iproute2
 	url = https://github.com/netgroup/linux-iproute2-dev.git
 	branch = ioam6-gob_v1
+[submodule "kernel/review-prompts"]
+	path = kernel/review-prompts
+	url = https://github.com/masoncl/review-prompts.git
+[submodule "kernel/semcode"]
+	path = kernel/semcode
+	url = https://github.com/facebookexperimental/semcode
