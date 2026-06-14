@@ -8,7 +8,7 @@ ARCH := $(shell uname -m)
 
 .PHONY: config kbuild kmodule install
 
-all: config kbuild install
+all: config kbuild install kmodule
 
 config:
 	@echo "Entering configs folder..."
@@ -27,7 +27,7 @@ config:
 kbuild:
 	@echo "Building kernel with $(NUM_JOBS) parallel jobs..."
 	cd linux && \
-		make -j$(NUM_JOBS)
+		make -j$(NUM_JOBS) C=1 W=1 2>&1 | tee output.log
 
 install:
 	@echo "Entering the tests/vm folder..."
@@ -40,6 +40,6 @@ install:
 		echo "Kernel already soft-linked in VM folder. Skipping linking."; \
 	fi
 
-#kmodule:
-#	@echo "Building out-of-tree kernel module with $(NUM_JOBS) parallel jobs..."
-#	cd modules && make all
+kmodule:
+	@echo "Building out-of-tree kernel module with $(NUM_JOBS) parallel jobs..."
+	cd modules && make all
