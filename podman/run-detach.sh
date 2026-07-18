@@ -13,5 +13,4 @@ podman run \
 	--privileged \
 	--name ioam-kernel-builder \
 	-v ../:/opt/kernel-playground \
-	-v $HOME/.ssh/id_ed25519:/root/.ssh/id_ed25519:ro \
 	-it localhost/ioam-kernel-builder
