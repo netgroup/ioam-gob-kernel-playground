@@ -508,6 +508,47 @@ out:
 	return BPF_OK;
 }
 
+/* Per-node GOB test program. Same shared counter as ioam6_gobv2_cnt (read the
+ * first word of the GOB payload, increment, write back), but the hardcoded
+ * node id is printed too. Loading a distinct section per node (n1/n2/n3) lets
+ * the trace tell the hops apart and pin which node processed last: the line
+ * with the highest counter must belong to the last node in the path.
+ */
+static __always_inline int
+ioam6_gobtest(struct bpf_ioam6_trace_gob_ctx *ctx, __u32 node)
+{
+	void *data_end = ctx->data_end;
+	void *data = ctx->data;
+	__u32 cnt;
+
+	if (!__gob_data_may_pull(data, sizeof(cnt), data_end))
+		goto out;
+
+	cnt = bpf_ntohl(*(__be32 *)data);
+	*(__be32 *)data = bpf_htonl(cnt + 1);
+	bpf_printk("ioam6_gobtest node=%u: cnt %u -> %u", node, cnt, cnt + 1);
+out:
+	return BPF_OK;
+}
+
+CSEC("ioam6_gobtest_n1")
+int prog_ioam6_gobtest_n1(struct bpf_ioam6_trace_gob_ctx *ctx)
+{
+	return ioam6_gobtest(ctx, 1);
+}
+
+CSEC("ioam6_gobtest_n2")
+int prog_ioam6_gobtest_n2(struct bpf_ioam6_trace_gob_ctx *ctx)
+{
+	return ioam6_gobtest(ctx, 2);
+}
+
+CSEC("ioam6_gobtest_n3")
+int prog_ioam6_gobtest_n3(struct bpf_ioam6_trace_gob_ctx *ctx)
+{
+	return ioam6_gobtest(ctx, 3);
+}
+
 CSEC("ioam6_gobv2_dynptr")
 int prog_ioam6_gobv2_dynptr(struct bpf_ioam6_trace_gob_ctx *ctx)
 {
