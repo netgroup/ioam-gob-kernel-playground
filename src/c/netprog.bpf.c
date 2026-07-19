@@ -336,7 +336,7 @@ CSEC("ioam6_newapi")
 int test_ioam6_newapi(struct bpf_ioam6_trace_gob_ctx *ctx)
 {
 	struct sk_buff *skb = ctx->skb;
-	struct ioam6_trace_gob_hdr gob;
+	__be32 pdata;
 	__u32 schema = ctx->schema;
 	__u32 skb_len = skb->len;
 	struct ipv6hdr ip6h, *p;
@@ -363,14 +363,16 @@ int test_ioam6_newapi(struct bpf_ioam6_trace_gob_ctx *ctx)
 	hoplim = p->hop_limit;
 	bpf_printk("GOB New API, IPv6 HopLimit=%d", hoplim);
 
-	ret = bpf_ioam6_trace_gob_load_bytes(ctx, 0, &gob, sizeof(gob));
+	/* the offset is payload-relative now; read the first payload word */
+	ret = bpf_ioam6_trace_gob_load_bytes(ctx, 0, &pdata, sizeof(pdata));
 	if (ret) {
-		bpf_printk("Cannot read the gob through the gob_load_bytes=%d",
+		bpf_printk("Cannot read the GOB payload through gob_load_bytes=%d",
 			   ret);
 		goto out;
 	}
 
-	bpf_printk("Directly from GOB, Len=%d", sizeof(gob) + gob.hbl.len * 4);
+	/* the GOB length comes from the context; the header is not addressable */
+	bpf_printk("GOB payload[0]=%u, GOB Len=%d", bpf_ntohl(pdata), len);
 
 out:
 	return BPF_OK;
@@ -380,7 +382,6 @@ CSEC("ioam6_newapi_rdwr")
 int test_ioam6_newapi_rdwr(struct bpf_ioam6_trace_gob_ctx *ctx)
 {
 	struct sk_buff *skb = ctx->skb;
-	struct ioam6_trace_gob_hdr gob;
 	__u32 schema = ctx->schema;
 	__u32 skb_len = skb->len;
 	struct ipv6hdr ip6h, *p;
@@ -411,18 +412,12 @@ int test_ioam6_newapi_rdwr(struct bpf_ioam6_trace_gob_ctx *ctx)
 	hoplim = p->hop_limit;
 	bpf_printk("GOB New API, IPv6 HopLimit=%d", hoplim);
 
-	ret = bpf_ioam6_trace_gob_load_bytes(ctx, 0, &gob, sizeof(gob));
-	if (ret) {
-		bpf_printk("Cannot read the gob through the gob_load_bytes=%d",
-			   ret);
-		goto out;
-	}
+	/* the GOB length comes from the context; the header is not addressable */
+	bpf_printk("GOB Len from ctx->len=%d", len);
 
-	bpf_printk("read from GOB using gob_load_bytes() helper, Len=%d",
-		   sizeof(gob) + gob.hbl.len * 4);
-
+	/* offset is payload-relative: write the first payload word */
 	counter = bpf_htonl(17);
-	ret = bpf_ioam6_trace_gob_store_bytes(ctx, sizeof(gob), &counter,
+	ret = bpf_ioam6_trace_gob_store_bytes(ctx, 0, &counter,
 					      sizeof(counter));
 	if (ret) {
 		bpf_printk("Cannot write using gob_store_bytes() helper func=%d",
