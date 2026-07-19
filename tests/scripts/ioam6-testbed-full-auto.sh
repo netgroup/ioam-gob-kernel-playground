@@ -239,7 +239,7 @@ ip netns exec porthos ip -6 route add fc00::d6/128 via dc02::2 \
 #------------------------------------------------------------
 ip netns exec athos "${P_IP}" ioam gobschema del ${GOBSCHEMA_ID} &>/dev/null || true
 ip netns exec athos "${P_IP}" ioam gobschema add ${GOBSCHEMA_ID} object "${BPF_OBJ}" \
-    section ioam6_gobv2_cnt
+    section ioam6_gobtest_n1
 ip netns exec athos "${P_IP}" ioam namespace set ${NAMESPACE_ID} gobschema ${GOBSCHEMA_ID}
 
 #------------------------------------------------------------
@@ -247,7 +247,7 @@ ip netns exec athos "${P_IP}" ioam namespace set ${NAMESPACE_ID} gobschema ${GOB
 #------------------------------------------------------------
 ip netns exec porthos "${P_IP}" ioam gobschema del ${GOBSCHEMA_ID} &>/dev/null || true
 ip netns exec porthos "${P_IP}" ioam gobschema add ${GOBSCHEMA_ID} object "${BPF_OBJ}" \
-    section ioam6_gobv2_cnt
+    section ioam6_gobtest_n2
 ip netns exec porthos "${P_IP}" ioam namespace set ${NAMESPACE_ID} gobschema ${GOBSCHEMA_ID}
 
 #------------------------------------------------------------
@@ -255,7 +255,7 @@ ip netns exec porthos "${P_IP}" ioam namespace set ${NAMESPACE_ID} gobschema ${G
 #------------------------------------------------------------
 ip netns exec aramis "${P_IP}" ioam gobschema del ${GOBSCHEMA_ID} &>/dev/null || true
 ip netns exec aramis "${P_IP}" ioam gobschema add ${GOBSCHEMA_ID} object "${BPF_OBJ}" \
-    section ioam6_gobv2_cnt
+    section ioam6_gobtest_n3
 ip netns exec aramis "${P_IP}" ioam namespace set ${NAMESPACE_ID} gobschema ${GOBSCHEMA_ID}
 
 #------------------------------------------------------------
@@ -263,7 +263,7 @@ ip netns exec aramis "${P_IP}" ioam namespace set ${NAMESPACE_ID} gobschema ${GO
 #------------------------------------------------------------
 ip netns exec athos "${P_IP}" -6 route add db22::22/64 \
     encap ioam6 mode encap tundst fc00::d6 \
-    trace prealloc ns ${NAMESPACE_ID} gobsize 4 dev athos-porthos
+    trace prealloc type 0x800000 ns ${NAMESPACE_ID} size 12 gobsize 8 dev athos-porthos
 
 #------------------------------------------------------------
 # 13a. SRv6 End.DT6 legacy decap on aramis (table main)
@@ -284,35 +284,79 @@ ip netns exec alfa ip -6 route add default via db11::1 dev alfa-athos
 ip netns exec beta ip -6 route add default via db22::1 dev beta-aramis
 
 #------------------------------------------------------------
-# 16. Non-interactive GOB v3 tail-layout verification
+# 16. Full IOAM6 selftest: 3 cases x per-node GOB diagnostics.
+#
+# Each hop (athos/porthos/aramis) runs a distinct per-node GOB section
+# (ioam6_gobtest_n1/n2/n3) that increments the shared GOB counter and prints
+# its node id. The three encap cases are exercised in turn:
+#
+#   gob-only   : GOB present, no traditional node data (remlen 0)
+#   ioam-only  : traditional node data, no GOB
+#   combined   : both, coexisting (node data at head, GOB at tail)
+#
+# GOB check (per node): each hop must do its exact step 0->1 (athos, n1),
+# 1->2 (porthos, n2), 2->3 (aramis, n3, the last hop). This proves per-hop
+# persistence, path order and the identity of the last node. sum==total means
+# no anomalous step. When GOB is not expected, no per-node line must appear.
+#
+# Node data check: ip ioam monitor on a transit node reports the filled node
+# data (stdbuf -oL is required, else the block-buffered output is lost on kill).
 #------------------------------------------------------------
 set +e
 set +x
-
 mount -t tracefs nodev /sys/kernel/tracing 2>/dev/null || true
-: > /sys/kernel/tracing/trace
 
-echo "===== GOB v3 test: athos ping6 -> beta (db22::2) ====="
-timeout 8 cat /sys/kernel/tracing/trace_pipe > /tmp/gob_trace.txt 2>/dev/null &
-CAP_PID=$!
-sleep 1
+RESULTS=""
 
-ip netns exec athos ping6 -c 5 -i 0.3 -W 2 db22::2
-PING_RC=$?
-echo "PING_RC=${PING_RC}"
+run_case() {
+    # $1 name  $2 trace-config  $3 expect_gob(y/n)  $4 expect_node(y/n)
+    local name="$1" trace="$2" xgob="$3" xnode="$4"
+    ip netns exec athos "${P_IP}" -6 route replace db22::22/64 \
+        encap ioam6 mode encap tundst fc00::d6 ${trace} dev athos-porthos
+    : > /sys/kernel/tracing/trace
+    timeout 10 cat /sys/kernel/tracing/trace_pipe > /tmp/gob.txt 2>/dev/null &
+    timeout 10 ip netns exec porthos stdbuf -oL "${P_IP}" ioam monitor > /tmp/mon.txt 2>&1 &
+    sleep 3
+    ip netns exec athos ping6 -c 5 -i 0.3 -W 2 db22::2 >/dev/null 2>&1
+    local ping=$?
+    sleep 2
+    pkill -f trace_pipe 2>/dev/null; pkill -f "ioam monitor" 2>/dev/null; sleep 1
 
-sleep 2
-kill "${CAP_PID}" 2>/dev/null
-wait "${CAP_PID}" 2>/dev/null
+    # --- per-node GOB analysis ---
+    local a p z total sum gob_ok=n gobinfo
+    a=$(grep -c 'ioam6_gobtest node=1: cnt 0 -> 1' /tmp/gob.txt)   # athos first
+    p=$(grep -c 'ioam6_gobtest node=2: cnt 1 -> 2' /tmp/gob.txt)   # porthos second
+    z=$(grep -c 'ioam6_gobtest node=3: cnt 2 -> 3' /tmp/gob.txt)   # aramis last -> 3
+    total=$(grep -c 'ioam6_gobtest node=' /tmp/gob.txt)
+    sum=$((a + p + z))
+    if [ "$xgob" = y ]; then
+        [ "$a" -gt 0 ] && [ "$p" -gt 0 ] && [ "$z" -gt 0 ] && [ "$sum" -eq "$total" ] && gob_ok=y
+        gobinfo="n1:0->1=$a n2:1->2=$p n3:2->3=$z ($sum/$total ok)"
+    else
+        [ "$total" -eq 0 ] && gob_ok=y
+        gobinfo="none($total)"
+    fi
 
-echo "===== ioam6_gobv2_cnt lines from trace_pipe ====="
-grep 'ioam6_gobv2_cnt' /tmp/gob_trace.txt
-GOB_LINES=$(grep -c 'ioam6_gobv2_cnt' /tmp/gob_trace.txt)
-echo "GOB_TRACE_LINES=${GOB_LINES}"
+    # --- traditional node data via ip ioam monitor ---
+    local nodedata node_written=n
+    nodedata=$(grep -m1 'Namespace=123' /tmp/mon.txt | sed -n 's/.*Data=\([0-9a-fA-F]*\).*/\1/p')
+    [ -n "$nodedata" ] && echo "$nodedata" | grep -qE '[1-9a-fA-F]' && node_written=y
+
+    local ok=PASS
+    [ "$ping" -ne 0 ] && ok=FAIL
+    [ "$gob_ok" != y ] && ok=FAIL
+    [ "$node_written" != "$xnode" ] && ok=FAIL
+
+    printf ">>> %-10s ping=%d  GOB[%s]=%s(exp %s)  node=%s(exp %s)  => %s\n" \
+        "$name" "$ping" "$gobinfo" "$gob_ok" "$xgob" "$node_written" "$xnode" "$ok"
+    RESULTS="${RESULTS}${name}=${ok} "
+}
+
+echo "===== IOAM6 full selftest (athos ping6 -> beta), per-node GOB =========="
+run_case "gob-only"  "trace prealloc ns ${NAMESPACE_ID} gobsize 8"                       y n
+run_case "ioam-only" "trace prealloc type 0x800000 ns ${NAMESPACE_ID} size 12"          n y
+run_case "combined"  "trace prealloc type 0x800000 ns ${NAMESPACE_ID} size 12 gobsize 8" y y
 
 echo "===== VERDICT ====="
-if [ "${PING_RC}" -eq 0 ] && [ "${GOB_LINES}" -gt 0 ]; then
-    echo "GOB_V3_TEST=PASS"
-else
-    echo "GOB_V3_TEST=FAIL (ping_rc=${PING_RC} gob_lines=${GOB_LINES})"
-fi
+echo "${RESULTS}"
+if echo "${RESULTS}" | grep -q FAIL; then echo "IOAM6_FULL_TEST=FAIL"; else echo "IOAM6_FULL_TEST=PASS"; fi
