@@ -7,7 +7,7 @@
 [submodule "tests/vm"]
 	path = tests/vm
 	url = https://github.com/netgroup/ioam-gob-linux-kernel-qemu-setup.git
-	branch = ioam6-gob_v1
+	branch = golden-base
 [submodule "kernel/linux"]
 	path = kernel/linux
 	url = https://github.com/netgroup/linux-kernel-dev.git
