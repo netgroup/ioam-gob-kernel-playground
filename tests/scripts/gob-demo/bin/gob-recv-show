@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# gob-recv-show   -- formatted view of the gob_recv map (what each node
+# received from the previous node)
+BT="/mnt/shared/bpftool"
+PIN="/sys/fs/bpf/tc/globals/gob_recv"
+"$BT" -j map dump pinned "$PIN" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print("(no data)"); sys.exit()
+print("received from the previous node (per node id):")
+print("  node |  min |  max |  sum | count")
+print("  -----+------+------+------+------")
+for e in d:
+    f = e.get("formatted", e)
+    k = int(f["key"]); v = f["value"]
+    if k < 2:
+        continue
+    print("  %4d | %4d | %4d | %4d | %4d" %
+          (k, int(v["min"]), int(v["max"]), int(v["sum"]), int(v["count"])))
+'

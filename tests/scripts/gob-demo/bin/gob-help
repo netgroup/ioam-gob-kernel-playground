@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# gob-help   -- list the GOB demo commands
+cat <<'HELP'
+GOB demo -- available commands:
+
+  gob-encap on          turn the IOAM+GOB encapsulation ON at n1
+  gob-encap off         turn it OFF (plain fallback, network works, no GOB)
+  gob-ping [count]      h1 pings h2 (default 3 packets)
+  gob-metric set nN V   set node N metric X   (e.g. gob-metric set n3 70)
+  gob-metric get nN     read node N metric X
+  gob-recv-show         table of what each node received (gob_recv map)
+  gob-help              this help
+
+typical demo:
+  gob-encap on ; gob-ping          -> RECEIVED panel fills
+  gob-metric set n3 70 ; gob-ping  -> downstream blocks change
+  gob-encap off ; gob-ping         -> still reaches h2, but no GOB
+HELP
