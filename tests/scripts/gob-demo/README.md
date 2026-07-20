@@ -28,7 +28,9 @@ Topology (7 network namespaces, a line):
       gob-demo-5node-recv-tmux.sh   interactive tmux dashboard
       gob-demo-5node-recv-auto.sh   non-interactive validation
       bin/                          control helpers: gob-metric, gob-encap,
-                                    gob-ping, gob-recv-show, gob-help
+                                    gob-ping, gob-recv-show, gob-help, and
+                                    ioam-nodedata-collect (background decoder
+                                    for the traditional IOAM node-data at n5)
 
 The eBPF source is `src/c/ioam6_gob_recv.bpf.c`.
 
@@ -57,12 +59,18 @@ The scripts check for the missing pieces and stop with a clear message.
     bash /mnt/scripts/gob-demo/gob-demo-5node-recv-tmux.sh
     tmux attach -t gobdemo
 
+The RECEIVED pane shows two tables. The top one is the GOB (from the
+gob_recv map, filled by the eBPF program). The bottom one is the traditional
+IOAM node-data seen at n5 (decoded by the background ioam-nodedata-collect).
+
 In the CONTROL pane type `gob-help` for the command list. Typical flow:
 
-    gob-encap on                     # turn IOAM+GOB on at n1
+    gob-encap combined               # node-data + GOB at n1: both tables fill
     gob-ping                         # h1 pings h2 -> RECEIVED panel fills
     gob-metric set n3 70 ; gob-ping  # change a metric, watch it propagate
-    gob-encap off                    # plain fallback: net works, no GOB
+    gob-encap gob                    # only the GOB: node-data table empties
+    gob-encap trad                   # only node-data: GOB table stops updating
+    gob-encap off                    # plain fallback: net works, no IOAM
 
 Non-interactive check:
 

@@ -10,13 +10,19 @@ try:
 except Exception:
     print("(no data)"); sys.exit()
 print("received from the previous node (per node id):")
-print("  node |  min |  max |  sum | count")
-print("  -----+------+------+------+------")
+print("  node |  min |  max |  sum | count | pkts")
+print("  -----+------+------+------+-------+------")
 for e in d:
     f = e.get("formatted", e)
     k = int(f["key"]); v = f["value"]
-    if k < 2:
+    if k < 1 or k > 5:
         continue
-    print("  %4d | %4d | %4d | %4d | %4d" %
-          (k, int(v["min"]), int(v["max"]), int(v["sum"]), int(v["count"])))
+    pkts = int(v["pkts"])
+    if k == 1:
+        print("  %4d | %4s | %4s | %4s | %5s | %4d" %
+              (k, "-", "-", "-", "-", pkts))
+    else:
+        print("  %4d | %4d | %4d | %4d | %5d | %4d" %
+              (k, int(v["min"]), int(v["max"]), int(v["sum"]),
+               int(v["count"]), pkts))
 '

@@ -46,12 +46,15 @@ struct {
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
 } gob_metric SEC(".maps");
 
-/* what each node received from the previous node, host byte order */
+/* what each node received from the previous node, host byte order.
+ * pkts counts every packet the node processed (bumped for every node).
+ */
 struct gob_recv_entry {
 	__u32 min;
 	__u32 max;
 	__u32 sum;
 	__u32 count;
+	__u32 pkts;
 };
 
 struct {
@@ -62,12 +65,11 @@ struct {
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
 } gob_recv SEC(".maps");
 
-/* record, under a node's own id, the aggregation block it received */
+/* record, in a node's own slot, the aggregation block it received */
 static __always_inline void
-gob_recv_store(__u32 node, __u32 min, __u32 max, __u32 sum, __u32 count)
+gob_recv_store(struct gob_recv_entry *slot, __u32 min, __u32 max,
+	       __u32 sum, __u32 count)
 {
-	struct gob_recv_entry *slot = bpf_map_lookup_elem(&gob_recv, &node);
-
 	if (slot) {
 		slot->min = min;
 		slot->max = max;
@@ -81,6 +83,7 @@ ioam6_gob_recv(struct bpf_ioam6_trace_gob_ctx *ctx, __u32 node)
 {
 	struct ioam6_gob_agg *agg = ctx->data;
 	void *data_end = ctx->data_end;
+	struct gob_recv_entry *slot;
 	__u32 min, max, sum, count;
 	__u32 key = node - 1;
 	__u32 *metricp;
@@ -95,6 +98,11 @@ ioam6_gob_recv(struct bpf_ioam6_trace_gob_ctx *ctx, __u32 node)
 
 	metric = *metricp;
 
+	/* every node counts every packet it processes */
+	slot = bpf_map_lookup_elem(&gob_recv, &node);
+	if (slot)
+		slot->pkts++;
+
 	count = bpf_ntohl(agg->count);
 	if (!count) {
 		/* first hop (n1): nothing received, seed with our metric */
@@ -104,8 +112,8 @@ ioam6_gob_recv(struct bpf_ioam6_trace_gob_ctx *ctx, __u32 node)
 		max = bpf_ntohl(agg->max);
 		sum = bpf_ntohl(agg->sum);
 
-		/* record what we received, then fold our metric in */
-		gob_recv_store(node, min, max, sum, count);
+		/* record the block received from the previous node */
+		gob_recv_store(slot, min, max, sum, count);
 
 		min = MIN(min, metric);
 		max = MAX(max, metric);

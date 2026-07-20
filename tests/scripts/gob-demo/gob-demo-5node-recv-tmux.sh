@@ -25,7 +25,7 @@
 # Control helpers (generated under /mnt/scripts/gob-demo-bin, thin wrappers
 # over the same bpftool/ip commands the -auto test uses):
 #   gob-metric set nN V | get nN     change/read a node metric X
-#   gob-encap  on | off              install/remove the n1 IOAM+GOB encap
+#   gob-encap  gob|combined|trad|off install/remove the n1 IOAM encap
 #   gob-ping   [count]               h1 pings h2
 #   gob-recv-show                    formatted view of the gob_recv map
 #
@@ -42,6 +42,7 @@ readonly GOBSCHEMA_ID=0xAA
 readonly METRIC_PIN="/sys/fs/bpf/tc/globals/gob_metric"
 readonly RECV_PIN="/sys/fs/bpf/tc/globals/gob_recv"
 readonly BINDIR="/mnt/scripts/gob-demo/bin"
+readonly NODEDATA_FILE="/tmp/ioam-nodedata.txt"
 readonly SESSION="gobdemo"
 readonly MODE="${1:-tmux}"
 
@@ -69,6 +70,8 @@ cleanup() {
         ip netns delete "$ns" 2>/dev/null || true
     done
     rm -f "${METRIC_PIN}" "${RECV_PIN}" 2>/dev/null || true
+    pkill -f ioam-nodedata-collect 2>/dev/null || true
+    rm -f "${NODEDATA_FILE}" 2>/dev/null || true
 }
 cleanup
 
@@ -133,7 +136,7 @@ ip -n n3 route add fcff::5/128 via fd34::4 dev v34a
 ip -n n4 route add fcff::5/128 via fd45::5 dev v45a
 
 # plain fallback path toward h2 (fdcc::2), used when the encap is off.
-# On n1 it is metric 200; gob-encap on installs the encap route at metric
+# On n1 it is metric 200; gob-encap installs the encap route at metric
 # 100 which then wins.
 ip -n h1 route add fdcc::2/128 via fd01::2 dev e01a
 ip -n n1 route add fdcc::2/128 via fd12::2 dev v12a metric 200
@@ -203,8 +206,8 @@ fi
 
 if [ "${MODE}" = "test" ]; then
     set +e
-    echo "=== encap ON, one ping, check gob_recv ==="
-    gob-encap on
+    echo "=== encap COMBINED, one ping, check gob_recv ==="
+    gob-encap combined
     gob-ping 3 >/dev/null 2>&1; P1=$?
     gob-recv-show
     echo "=== encap OFF, one ping, network must still work, gob_recv unchanged ==="
@@ -222,11 +225,18 @@ fi
 #------------------------------------------------------------
 # 9. tmux dashboard: top row = 5 node metrics, bottom = received | control
 #------------------------------------------------------------
+# Background collector for the traditional IOAM node-data (not the GOB) seen
+# at n5. It keeps NODEDATA_FILE current, so the RECEIVED pane can show it
+# under the GOB table. The python helper uses a pty to keep ip ioam monitor
+# line buffered. It is killed by cleanup on the next run.
+echo "node-data received at n5: (waiting for a ping)" > "${NODEDATA_FILE}"
+python3 "${BINDIR}/ioam-nodedata-collect" n5 "${NODEDATA_FILE}" >/dev/null 2>&1 &
+
 # Build with stable pane ids (%N) to avoid pane-index guessing.
 top=$(tmux new-session -d -s "${SESSION}" -x 210 -y 50 -P -F '#{pane_id}')
 tmux set -g mouse on
-# bottom band (fixed 15 lines): received (left) + control (right, wider)
-bot=$(tmux split-window -v -l 15 -P -F '#{pane_id}' -t "${top}")
+# bottom band (fixed 20 lines): received (left) + control (right, wider)
+bot=$(tmux split-window -v -l 20 -P -F '#{pane_id}' -t "${top}")
 ctl=$(tmux split-window -h -p 45 -P -F '#{pane_id}' -t "${bot}")
 # top band split into five equal columns n1..n5
 n2=$(tmux split-window -h -p 80 -P -F '#{pane_id}' -t "${top}")
@@ -244,13 +254,14 @@ for p in "${top}" "${n2}" "${n3}" "${n4}" "${n5}"; do
 done
 # bottom-left -> received view
 tmux send-keys -t "${bot}" "export PATH=${BINDIR}:\$PATH" C-m
-tmux send-keys -t "${bot}" "watch -t -n1 gob-recv-show" C-m
+tmux send-keys -t "${bot}" \
+    "watch -t -n1 'gob-recv-show; echo; cat ${NODEDATA_FILE} 2>/dev/null'" C-m
 # bottom-right -> control shell + cheat-sheet
 tmux send-keys -t "${ctl}" "export PATH=${BINDIR}:\$PATH" C-m
 tmux send-keys -t "${ctl}" \
     "clear; echo 'CONTROL panel'; \
      echo 'type  gob-help  for the list of commands'; \
-     echo; echo 'quick start:  gob-encap on ; gob-ping'" C-m
+     echo; echo 'quick start:  gob-encap combined ; gob-ping'" C-m
 
 echo "tmux session '${SESSION}' ready. Attach with: tmux attach -t ${SESSION}"
 echo "(detach with Ctrl-b d; run '$0 clean' or kill the session to tear down)"

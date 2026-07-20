@@ -1,3 +1,10 @@
 #!/usr/bin/env bash
-# gob-ping [count]   -- h1 pings h2 (default 3 packets)
-ip netns exec h1 ping -6 -c "${1:-3}" -i 0.3 -I fdcc::1 fdcc::2
+# gob-ping [count] [hoplimit]  -- h1 pings h2
+#   count      number of packets (default 3)
+#   hoplimit   optional IPv6 hop limit (ping -t). In mode encap the outer
+#              header copies the inner hop limit, so varying it shifts the
+#              IOAM node-data hop_lim values recorded along the path.
+count="${1:-3}"
+hl=""
+[ -n "${2:-}" ] && hl="-t $2"
+ip netns exec h1 ping -6 -c "$count" -i 0.3 $hl -I fdcc::1 fdcc::2

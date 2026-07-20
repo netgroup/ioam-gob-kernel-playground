@@ -1,20 +1,39 @@
 #!/usr/bin/env bash
-# gob-encap on|off   -- toggle the IOAM+GOB encapsulation on n1.
-# 'on' installs the encap route at metric 100 (wins over the plain fallback
-# at metric 200 that the demo setup installed); 'off' removes it.
+# gob-encap gob|combined|trad|off  -- select the IOAM encapsulation on n1.
+#
+#   gob        only the GOB          (trace prealloc ns 123 gobsize 16)
+#   combined   node-data + GOB       (... type 0x800000 size 20 gobsize 16)
+#   trad       only the node-data    (... type 0x800000 size 20)
+#   off        remove it, plain fallback (network works, no IOAM)
+#
+# The encap route is installed at metric 100 so it wins over the plain
+# fallback at metric 200 that the demo setup installed.
 IP="/mnt/iproute2/ip/ip"
-case "$1" in
-on)
+
+encap() {
     ip netns exec n1 "$IP" -6 route replace fdcc::2/128 \
         encap ioam6 mode encap tundst fcff::5 \
-        trace prealloc type 0x800000 ns 123 size 20 gobsize 16 \
+        trace prealloc "$@" \
         dev v12a metric 100
-    echo "encap ON  (IOAM+GOB active)"
+}
+
+case "$1" in
+gob)
+    encap ns 123 gobsize 16
+    echo "encap GOB       (only GOB, no node-data)"
+    ;;
+combined)
+    encap type 0x800000 ns 123 size 20 gobsize 16
+    echo "encap COMBINED  (node-data + GOB)"
+    ;;
+trad)
+    encap type 0x800000 ns 123 size 20
+    echo "encap TRAD      (only node-data, no GOB)"
     ;;
 off)
     ip netns exec n1 "$IP" -6 route del fdcc::2/128 dev v12a metric 100 2>/dev/null || true
-    echo "encap OFF (plain fallback, no GOB)"
+    echo "encap OFF       (plain fallback, no IOAM)"
     ;;
 *)
-    echo "usage: gob-encap on|off" ;;
+    echo "usage: gob-encap gob|combined|trad|off" ;;
 esac
