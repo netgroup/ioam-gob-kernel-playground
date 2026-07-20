@@ -23,7 +23,7 @@ CFLAGS := -g -Wall
 ALL_LDFLAGS := $(LDFLAGS) $(EXTRA_LDFLAGS)
 
 #APPS = xdp
-KERNEL_APPS = netprog
+KERNEL_APPS = netprog ioam6_gob_recv
 
 # Get Clang's default includes on this system. We'll explicitly add these dirs
 # to the includes list when compiling with `-target bpf` because otherwise some

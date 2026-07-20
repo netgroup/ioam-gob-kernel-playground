@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# gob-metric set nN V | get nN   -- read/write a node metric X (gob_metric map)
+BT="/mnt/shared/bpftool"
+PIN="/sys/fs/bpf/tc/globals/gob_metric"
+node="${2#n}"
+key=$((node - 1))
+case "$1" in
+set)
+    v="$3"
+    "$BT" map update pinned "$PIN" key $key 0 0 0 \
+        value $((v & 255)) $(((v >> 8) & 255)) $(((v >> 16) & 255)) $(((v >> 24) & 255))
+    ;;
+get)
+    "$BT" -j map lookup pinned "$PIN" key $key 0 0 0 | python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+v = d.get("formatted", d).get("value", d.get("value"))
+if isinstance(v, list):
+    v = sum(int(b, 0) << (8 * i) for i, b in enumerate(v))
+print(int(v))'
+    ;;
+*)
+    echo "usage: gob-metric set nN V | get nN" ;;
+esac

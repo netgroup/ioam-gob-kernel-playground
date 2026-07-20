@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# gob-encap on|off   -- toggle the IOAM+GOB encapsulation on n1.
+# 'on' installs the encap route at metric 100 (wins over the plain fallback
+# at metric 200 that the demo setup installed); 'off' removes it.
+IP="/mnt/iproute2/ip/ip"
+case "$1" in
+on)
+    ip netns exec n1 "$IP" -6 route replace fdcc::2/128 \
+        encap ioam6 mode encap tundst fcff::5 \
+        trace prealloc type 0x800000 ns 123 size 20 gobsize 16 \
+        dev v12a metric 100
+    echo "encap ON  (IOAM+GOB active)"
+    ;;
+off)
+    ip netns exec n1 "$IP" -6 route del fdcc::2/128 dev v12a metric 100 2>/dev/null || true
+    echo "encap OFF (plain fallback, no GOB)"
+    ;;
+*)
+    echo "usage: gob-encap on|off" ;;
+esac

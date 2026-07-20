@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# gob-ping [count]   -- h1 pings h2 (default 3 packets)
+ip netns exec h1 ping -6 -c "${1:-3}" -i 0.3 -I fdcc::1 fdcc::2
