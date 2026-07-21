@@ -25,7 +25,10 @@ done
 #
 # This builds a minimal rootfs to be used by the VM
 pushd tests/vm
-./create-image.sh -f full
+# GOLDEN_IMAGE=1 builds a shared base image, meant to back several per-guest
+# qcow2 overlays: no hostname, machine-id or auto-configured network baked in,
+# and the resulting image is read-only. Unset, the image is built as before.
+./create-image.sh -f full ${GOLDEN_IMAGE:+-g}
 popd
 
 # Kernel setup
