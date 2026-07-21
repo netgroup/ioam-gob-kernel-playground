@@ -47,7 +47,10 @@ Inside the ioam-kernel-builder container:
   the GOB at runtime;
 - the GOB-aware iproute2 at `/mnt/iproute2/ip/ip` (`ip ioam gobschema`,
   `encap ioam6 ... gobsize`);
-- `bpftool` at `/mnt/shared/bpftool`;
+- `bpftool` at `/mnt/shared/bpftool`. Build it with
+  `tools/build-bpftool-for-guest.sh`, run on the host: bpftool built in the
+  ioam-kernel-builder container is linked against a glibc newer than the
+  guest's and fails to start there;
 - `tmux`, `python3`, `nsenter`.
 
 The scripts check for the missing pieces and stop with a clear message.
