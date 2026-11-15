@@ -278,8 +278,8 @@ With `?test=1`, `gob-init` runs at boot:
 1. the 5-node demo, with the eBPF object built into the disk image,
 2. `make` in `/opt/gob/src`: clang builds the program inside the VM,
 3. the 5-node demo again, now with the object clang just built,
-4. the interactive demo as the welcome message shows it: `setup-only`,
-   `gob-encap combined`, `gob-ping`, `gob-recv-show`,
+4. the `gob-*` commands of the welcome message, without tmux:
+   `setup-only`, `gob-encap combined`, `gob-ping`, `gob-recv-show`,
    `gob-metric set n3 70`, `gob-ping`, `gob-recv-show`.
 
 The test passes when all of these hold:

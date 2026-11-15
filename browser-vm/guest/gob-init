@@ -45,7 +45,7 @@ if grep -qw gobtest=1 /proc/cmdline; then
 		echo "GOBTEST2_BEGIN"
 		bash /mnt/scripts/gob-demo/gob-demo-5node-recv-auto.sh
 		echo "GOBTEST2_END rc=$?"
-		# The interactive demo, as the motd shows it.
+		# The gob-* commands of the motd, without tmux.
 		echo "GOBTEST3_BEGIN"
 		bash /mnt/scripts/gob-demo/gob-demo-5node-recv-tmux.sh setup-only &&
 			gob-encap combined && gob-ping && gob-recv-show &&
