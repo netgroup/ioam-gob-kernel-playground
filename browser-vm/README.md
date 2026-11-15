@@ -372,7 +372,7 @@ Site:
 
 | File | Size |
 |---|---|
-| guest package (kernel, disk, BIOS), gzip, 2 parts | 94,677,482 bytes |
+| guest package (kernel, disk, BIOS), gzip, 2 parts | 94,670,425 bytes |
 | `qemu-system-x86_64.wasm` | 11,703,534 bytes |
 | whole site | about 107 MB |
 
@@ -383,23 +383,39 @@ Self test, seconds from opening the page:
 | cross-origin isolated (download starts) | 6 s |
 | shell ready, self test starts | 21 s |
 | first demo PASS | 81 s |
-| clang build in the VM | 81 s, done at 166 s |
-| second demo (object built in the VM) done | 211 s |
-| interactive demo done, end of the test | 256 s |
+| clang build in the VM | 81 s, done at 156 s |
+| second demo (object built in the VM) done | 206 s |
+| interactive demo done, end of the test | 252 s |
 
 The same test before the performance section of the kernel config (see
 [Design notes](#design-notes)): shell at 26 s, first demo at 106 s,
 clang 93 s, end at 322 s.
 
-Cost of a command in the VM, three runs in a row, after the boot:
+Shell ready, two runs each: 18.7 s and 19.8 s without `?boot=1`, 21.3 s
+and 21.5 s with it (all the 202 kernel messages on the terminal).
+
+Cost of a command in the VM, three runs in a row, after the boot, without
+the dashboard:
 
 | Command | Runs |
 |---|---|
-| `python3 -c pass` | 4.7 s, 1.6 s, 1.6 s (about 19 s for the very first run after the boot) |
-| `gob-metric get n1` (bash, plus Python for the JSON) | 21.7 s, 16.5 s, 6.0 s |
-| `gob-recv-show` (bash, plus Python for the JSON) | 6.1 s, 6.1 s, 6.0 s |
-| `bpftool map dump` of `gob_recv` | 0.5 s, 0.5 s, 0.5 s |
-| `bash -c true` | 0.2 s |
+| `python3 -c pass` | 4.6 s, 1.8 s, 1.6 s |
+| `gob-metric get n1` | 0.41 s, 0.37 s, 0.38 s |
+| `gob-recv-show` | 0.69 s, 0.59 s, 0.60 s |
+| `bpftool map dump` of `gob_recv` | 0.18 s, 0.18 s, 0.17 s |
+| `bash -c true` | 0.12 s, 0.14 s, 0.11 s |
+
+When they used Python to parse the JSON of `bpftool -j`, `gob-metric get
+n1` took 21.7 s, 16.5 s and 6.0 s, and `gob-recv-show` 6.0 to 6.1 s.
+
+The tmux dashboard, with its 15 s refresh:
+
+| Step | Time |
+|---|---|
+| from `gob-demo-5node-recv-tmux.sh` to the panes drawn | 41 to 44 s |
+| RECEIVED during `gob-ping 30` | changes about every 2 s, 30 packets after 12.8 s |
+| `gob-metric set n3 70` until its pane shows 70 | 1.6 s from the start of typing |
+| CPU of the idle VM with the dashboard, over 30 s | 15% busy |
 
 `./build.sh all` from an empty `out/`: 46 minutes (the clang step alone
 about 17). Disk used by `out/` afterwards: 16 GB, podman storage
