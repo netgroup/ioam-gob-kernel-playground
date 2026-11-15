@@ -3,26 +3,34 @@
 # received from the previous node)
 BT="/mnt/shared/bpftool"
 PIN="/sys/fs/bpf/tc/globals/gob_recv"
-"$BT" -j map dump pinned "$PIN" 2>/dev/null | python3 -c '
-import json, sys
-try:
-    d = json.load(sys.stdin)
-except Exception:
-    print("(no data)"); sys.exit()
-print("received from the previous node (per node id):")
-print("  node |  min |  max |  sum | count | pkts")
-print("  -----+------+------+------+-------+------")
-for e in d:
-    f = e.get("formatted", e)
-    k = int(f["key"]); v = f["value"]
-    if k < 1 or k > 5:
-        continue
-    pkts = int(v["pkts"])
-    if k == 1:
-        print("  %4d | %4s | %4s | %4s | %5s | %4d" %
-              (k, "-", "-", "-", "-", pkts))
-    else:
-        print("  %4d | %4d | %4d | %4d | %5d | %4d" %
-              (k, int(v["min"]), int(v["max"]), int(v["sum"]),
-               int(v["count"]), pkts))
-'
+# Plain bpftool output, read with bash only: starting Python costs seconds
+# in the browser VM. With BTF, bpftool prints one "field": N per line, in
+# the order of struct gob_recv_entry (min, max, sum, count, pkts).
+out=$("$BT" map dump pinned "$PIN" 2>/dev/null)
+if [ -z "$out" ]; then
+    echo "(no data)"
+    exit
+fi
+echo "received from the previous node (per node id):"
+echo "  node |  min |  max |  sum | count | pkts"
+echo "  -----+------+------+------+-------+------"
+k=-1
+while IFS= read -r l; do
+    [[ $l =~ \"(key|min|max|sum|count|pkts)\":\ ([0-9]+) ]] || continue
+    n=${BASH_REMATCH[2]}
+    case ${BASH_REMATCH[1]} in
+    key) k=$n ;;
+    min) mn=$n ;;
+    max) mx=$n ;;
+    sum) sm=$n ;;
+    count) ct=$n ;;
+    pkts)
+        ((k >= 1 && k <= 5)) || continue
+        if ((k == 1)); then
+            printf "  %4d | %4s | %4s | %4s | %5s | %4d\n" "$k" - - - - "$n"
+        else
+            printf "  %4d | %4d | %4d | %4d | %5d | %4d\n" "$k" "$mn" "$mx" "$sm" "$ct" "$n"
+        fi
+        ;;
+    esac
+done <<< "$out"

@@ -11,13 +11,19 @@ set)
         value $((v & 255)) $(((v >> 8) & 255)) $(((v >> 16) & 255)) $(((v >> 24) & 255))
     ;;
 get)
-    "$BT" -j map lookup pinned "$PIN" key $key 0 0 0 | python3 -c '
-import json, sys
-d = json.load(sys.stdin)
-v = d.get("formatted", d).get("value", d.get("value"))
-if isinstance(v, list):
-    v = sum(int(b, 0) << (8 * i) for i, b in enumerate(v))
-print(int(v))'
+    # Plain bpftool output, read with bash only: starting Python costs
+    # seconds in the browser VM. With BTF it prints "value": N; without,
+    # the four value bytes, little endian.
+    out=$("$BT" map lookup pinned "$PIN" key $key 0 0 0 2>/dev/null)
+    if [[ $out =~ \"value\":\ ([0-9]+) ]]; then
+        echo "${BASH_REMATCH[1]}"
+    elif [[ $out =~ value:\ ([0-9a-f]{2})\ ([0-9a-f]{2})\ ([0-9a-f]{2})\ ([0-9a-f]{2}) ]]; then
+        echo $((0x${BASH_REMATCH[1]} | 0x${BASH_REMATCH[2]} << 8 |
+                0x${BASH_REMATCH[3]} << 16 | 0x${BASH_REMATCH[4]} << 24))
+    else
+        echo "gob-metric: cannot read $PIN key $key" >&2
+        exit 1
+    fi
     ;;
 *)
     echo "usage: gob-metric set nN V | get nN" ;;
