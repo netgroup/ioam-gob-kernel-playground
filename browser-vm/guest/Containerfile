@@ -49,7 +49,10 @@ RUN chmod 755 /sbin/gob-init && chmod -R a+rX /mnt/scripts && \
 	mkdir -p /mnt/shared /mnt/iproute2/ip && \
 	ln -s /usr/sbin/ip /mnt/iproute2/ip/ip && \
 	ln -s /usr/local/sbin/bpftool /mnt/shared/bpftool && \
-	echo 'PATH="$PATH:/mnt/scripts/gob-demo:/mnt/scripts/gob-demo/bin"' > /etc/profile.d/gob-demo.sh
+	printf '%s\n' 'PATH="$PATH:/mnt/scripts/gob-demo:/mnt/scripts/gob-demo/bin"' \
+		'# the tmux dashboard panes refresh on each gob-* command, and at the' \
+		'# latest every 30 s here instead of every second' \
+		'export GOB_DEMO_REFRESH=30' > /etc/profile.d/gob-demo.sh
 
 # Drop what clang -target bpf, ip, bpftool and the demo do not use, then
 # check that clang still builds the demo program and that the tools run.

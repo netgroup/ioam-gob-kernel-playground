@@ -168,6 +168,14 @@
         const { default: initEmscriptenModule } = await import('./out.js');
 
         const { master, slave } = openpty();
+        // No NL to CR NL conversion here: the guest already does it on its
+        // own terminals, and a full-screen program in raw mode (tmux) sends
+        // bare NL to move down one line in the same column. QEMU starts from
+        // these settings and keeps OPOST, so ONLCR must be off before it
+        // starts (0x4 is ONLCR in c_oflag).
+        const termios = slave.ioctl('TCGETS');
+        termios.oflag &= ~0x4;
+        slave.ioctl('TCSETS', termios);
         xterm.loadAddon(master);
 
         Module.pty = slave;

@@ -33,6 +33,7 @@ everything it writes stays in `browser-vm/out/`.
 - [Publishing on GitHub Pages](#publishing-on-github-pages)
 - [Measurements](#measurements)
 - [Known limitations](#known-limitations)
+- [Problems found and how they were solved](#problems-found-and-how-they-were-solved)
 - [Design notes](#design-notes)
 - [Troubleshooting](#troubleshooting)
 - [Files](#files)
@@ -98,6 +99,7 @@ Local changes that are not committed are not used.
 | `pack` | the web site. The compressed disk is cached by the sha256 of kernel, disk and BIOS, so a change to the page only takes seconds | `out/site/` |
 | `test` | self test in headless Chromium, about 6 minutes | `out/logs/test*` |
 | `test-quick` | boot and a few commands in headless Chromium, about 1 minute. For changes to the page, not enough to publish | `out/logs/test-quick.log` |
+| `test-native` | the self test with native QEMU in a container, KVM if usable. For changes to the guest, not enough to publish | `out/logs/test-native*.log` |
 | `all` | every step above, in this order | |
 | `serve` | serves `out/site/` on `http://127.0.0.1:8000/` | |
 | `clean` | removes `out/`, podman storage included | |
@@ -109,7 +111,7 @@ can be run again on its own. Which steps a change needs:
 | Changed | Run |
 |---|---|
 | `web/` (the page) | `./build.sh pack test-quick`, then `test` before publishing |
-| `guest/` (gob-init, motd, packages) or the demo in the playground | `./build.sh sources guest pack test` |
+| `guest/` (gob-init, motd, packages) or the demo in the playground | `./build.sh sources guest test-native`, then `pack test` before publishing |
 | `kernel/gob-web.fragment` or the kernel submodule | `./build.sh sources kernel guest pack test` |
 
 Every step runs in a container:
@@ -140,6 +142,8 @@ Environment variables of `build.sh`:
 | `CLANG_JOBS` | `10` | parallel jobs for LLVM. With 10 jobs the peak was about 12 GB |
 | `PORT` | `8000` | port of `serve` |
 | `PAGES_REPO` | `https://github.com/netgroup/gob-browser-vm.git` | where `publish` pushes the site |
+| `KVM_SUDO` | `0` | `1`: `test-native` runs podman as root to use `/dev/kvm`, with its own storage in `$WORK/podman-root-storage` |
+| `NATIVE_TIMEOUT` | `900` | seconds before `test-native` gives up |
 
 The temporary files of podman and buildah go to `$WORK/tmp` (`TMPDIR`).
 Only the small runtime state of podman stays in `/run/user/<uid>`.
@@ -230,8 +234,12 @@ node 5 gets max 70 and sum 140. `gob-encap gob`, `trad` and `off` switch
 the encapsulation of n1 between GOB only, node data only and no IOAM.
 
 The same script without `setup-only` prepares a tmux dashboard: run it,
-then `tmux attach -t gobdemo` (detach with `Ctrl-b d`). It draws in the
-browser VM, but it is slow there (see [Known limitations](#known-limitations)).
+then `tmux attach -t gobdemo` (detach with `Ctrl-b d`). The five panes at
+the top show the metric of each node, RECEIVED shows what each node
+received, and CONTROL, where the cursor starts, takes the `gob-*`
+commands. The panes refresh after each `gob-ping`, `gob-metric set` and
+`gob-encap`, and at the latest every 30 s in the browser VM
+(`GOB_DEMO_REFRESH`). `Ctrl-b r` redraws the whole screen.
 
 Build the eBPF program yourself, then run the demo again with your build:
 
@@ -286,6 +294,13 @@ It also checks that the demo scripts and the `gob-*` helpers are in the
 `top`) and detaches, and it logs how long `python3 -c pass` takes.
 It takes about a minute, and is meant for changes to the page. Run the
 full `test` before publishing.
+
+`./build.sh test-native` boots the same kernel and disk with native QEMU
+in a container, with the kernel command line of `?test=1`, and checks the
+same markers on the serial console. It tests the guest, not the page.
+QEMU uses KVM when the user can open `/dev/kvm` (group `kvm`). Otherwise
+`KVM_SUDO=1` runs podman as root for this step, with its own storage under
+`out/`, and without either QEMU emulates (TCG).
 
 The result of the full test is the last line of `out/logs/test.log`,
 `BROWSER_VM_TEST=PASS` or `BROWSER_VM_TEST=FAIL`. The whole terminal is in
@@ -398,13 +413,57 @@ included.
 - **No network** to the outside: QEMU runs with `-nic none`.
 - **No persistence:** the disk lives in memory, reloading the page resets
   it.
-- **The tmux dashboard is slow.** It draws, but its six panels run
-  `gob-metric get` and `gob-recv-show` every second (`watch -n1`), and in
-  the VM each run takes about 6 s, nearly all of it to start Python and
-  its json module (`bpftool` itself takes about 0.5 s, see
-  [Measurements](#measurements)). The panels hardly update and the VM
-  stays busy. Use `setup-only` and the `gob-*` commands instead.
+- **The node-data under the RECEIVED table stays "(waiting for a ping)"**
+  in the browser VM. It comes from `ioam-nodedata-collect`, a Python
+  helper that the dashboard starts in the background, and Python is very
+  slow under emulation (see [Measurements](#measurements)). The GOB table
+  above it works.
 - The QEMU WebAssembly JIT of qemu-wasm is experimental upstream.
+
+## Problems found and how they were solved
+
+Each entry: what was seen, what caused it and how it was shown, and the
+fix.
+
+- **tmux garbled the screen: text in the wrong pane, missing letters,
+  stray characters.** A `Ctrl-b r` (full redraw) cleaned the screen, and
+  `tmux capture-pane` showed the right content, so tmux was right and the
+  damage happened on the way to xterm.js. A capture of the bytes written
+  to xterm.js showed that all 1123 line feeds of the dashboard arrived as
+  CR LF, none bare. Cause: xterm-pty converts NL to CR NL (`ONLCR` in its
+  default termios), and QEMU keeps `OPOST` when it sets up its stdio
+  (`qemu_chr_set_echo_stdio()` in `chardev/char-stdio.c`). tmux, in raw
+  mode, sends a bare NL to move down one line in the same column, and the
+  added CR sent the cursor to column 1. Fix: the page turns `ONLCR` off
+  (`slave.ioctl('TCSETS', ...)`) before QEMU starts. Afterwards 964 of 976
+  line feeds arrived bare and the dashboard stays clean. The guest still
+  converts NL on its own terminals, so plain output is unchanged.
+- **tmux did not draw at all.** After `tmux attach` the terminal did not
+  change, though tmux was attached (`Ctrl-b d` detached it). The same
+  tmux, attached through `script` (a pty), drew. Cause: the tmux client
+  was attached directly to the serial console. Fix: `gob-init` runs the
+  shell on a pty made by `script`.
+- **Long lines wrapped badly.** `stty size` said `0 0`: a serial console
+  has no window size. Fix: the page passes the size of its terminal on the
+  kernel command line (`gobterm=COLSxROWS`) and `gob-init` sets it with
+  `stty`.
+- **`gob-help`, `gob-ping` and the other helpers were "command not
+  found".** `gob-init` added them to `PATH`, but the shell is a login shell
+  and `/etc/profile` sets `PATH` again. Fix: `/etc/profile.d/gob-demo.sh`.
+  The self test had not seen it because it runs in the environment of
+  `gob-init`. `test-quick` now checks it from the shell.
+- **The dashboard froze the VM.** Its six panes ran `watch -n1`, and each
+  run started Python to parse the JSON of `bpftool -j`: about 6 s each in
+  the VM, so about 36 s of CPU per second. Fix: `gob-metric` and
+  `gob-recv-show` read the plain `bpftool` output in bash (0.5 s and 1.2 s,
+  same output), and the panes refresh when a `gob-*` command signals them
+  (`tmux wait-for`) instead of every second.
+- **A status bar with the CPU and memory of the VM was tried and
+  dropped.** The guest wrote its numbers to a 9p share (`-virtfs`) every
+  2 s. The share mounted, but creating a file in it failed with "Channel
+  number out of range", the error filled the terminal, and the loop made
+  the VM slower. It was removed. A persistence based on the same 9p share
+  would hit the same problem first.
 
 ## Design notes
 
@@ -439,6 +498,10 @@ build host.
   attached to a serial port. `gob-init` starts the shell with
   `script -q -c "/bin/bash -l" /dev/null` on the serial console, so the
   shell and everything started from it use a pty.
+- **No NL to CR NL conversion in the page**: see
+  [Problems found and how they were solved](#problems-found-and-how-they-were-solved).
+- **gob-metric and gob-recv-show read the maps in bash**, not Python: in
+  the VM a run went from about 6 s to 0.5 s and 1.2 s.
 - **The terminal size goes on the kernel command line.** A serial console
   does not carry a window size, so `stty size` says `0 0` and long lines
   wrap badly. The page fits the terminal to the window, passes
@@ -474,6 +537,7 @@ browser-vm/
 ├── build.sh                     the only entry point
 ├── containers/
 │   ├── builder.Containerfile    builder image
+│   ├── qemu-native.Containerfile  native QEMU, for test-native
 │   └── apt-snapshot             apt on snapshot.debian.org
 ├── scripts/
 │   ├── fetch-sources.sh         sources from the playground commit, qemu-wasm
@@ -481,7 +545,8 @@ browser-vm/
 │   ├── build-clang.sh           BPF-only static clang
 │   ├── adapt-qemu-dockerfile.py the qemu-wasm Dockerfile, for podman and pinned
 │   ├── build-qemu.sh            qemu-system-x86_64 in WebAssembly
-│   └── pack-site.sh             compressed package and web site
+│   ├── pack-site.sh             compressed package and web site
+│   └── test-native.sh           self test with native QEMU
 ├── kernel/gob-web.fragment      kernel options
 ├── guest/
 │   ├── Containerfile            guest disk
@@ -491,7 +556,9 @@ browser-vm/
 ├── web/
 │   ├── index.html               the page
 │   └── module.js                QEMU arguments
-└── test/run_test.py             headless browser test
+└── test/
+    ├── run_test.py              full headless browser test
+    └── quick_test.py            one-minute headless browser test
 ```
 
 ## Credits and licenses

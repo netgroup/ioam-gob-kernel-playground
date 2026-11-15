@@ -16,6 +16,8 @@
 #   test     self test in headless Chromium (about 6 minutes)
 #   test-quick  boot and a few commands in headless Chromium (about 1 minute,
 #            for changes to the page; not part of all, not enough to publish)
+#   test-native  the self test with native QEMU in a container, KVM if usable
+#            (for changes to the guest; not part of all, not enough to publish)
 #   all      every step above, in this order
 #   serve    serve $WORK/site on http://127.0.0.1:$PORT (not part of all)
 #   clean    remove $WORK, podman storage included (not part of all)
@@ -60,6 +62,7 @@ PLAYWRIGHT_PIP="playwright==1.48.0 greenlet==3.1.1 pyee==12.0.0 typing_extension
 BUILDER_IMAGE=localhost/gobweb-builder
 QEMU_IMAGE=localhost/gobweb-qemu
 GUEST_IMAGE=localhost/gobweb-guest
+NATIVE_IMAGE=localhost/gobweb-qemu-native
 
 die() { echo "build.sh: $*" >&2; exit 1; }
 
@@ -199,6 +202,10 @@ do_clean() {
 	# which would mount the storage being removed, and not "podman system
 	# reset", which also clears the runtime state shared with the default
 	# podman storage of the user.
+	# The storage of KVM_SUDO=1 belongs to root.
+	if [ -d "$WORK/podman-root-storage" ]; then
+		sudo rm -rf "$WORK/podman-root-storage" || die "cannot remove $WORK/podman-root-storage"
+	fi
 	podman unshare rm -rf "$WORK" || die "clean failed"
 	[ ! -e "$WORK" ] || die "clean failed: $WORK still exists"
 }
@@ -235,6 +242,38 @@ do_test_quick() {
 	[ $rc = 0 ] || die "quick test failed, see $WORK/logs/test-quick.log"
 }
 
+# The native test needs /dev/kvm for speed. Rootless podman can pass it
+# only if the user can open it (group kvm). With KVM_SUDO=1 it runs podman
+# as root instead, with its own storage under $WORK; without either, QEMU
+# emulates (TCG), slower.
+do_test_native() {
+	local pm=("${PM[@]}") dev=() root=$WORK/podman-root-storage
+	step "native test (QEMU in a container)"
+	if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+		dev=(--device /dev/kvm)
+	elif [ "${KVM_SUDO:-0}" = 1 ]; then
+		mkdir -p "$root" || die "cannot create $root"
+		pm=(sudo env TMPDIR="$TMPDIR" podman --root "$root")
+		dev=(--device /dev/kvm)
+		echo "    KVM_SUDO=1: podman as root, storage in $root"
+	else
+		echo "    /dev/kvm not usable by $(id -un): TCG (KVM_SUDO=1 uses podman as root)"
+	fi
+	"${pm[@]}" build -t $NATIVE_IMAGE -f "$HERE/containers/qemu-native.Containerfile" \
+		--build-arg DEBIAN_IMAGE="$DEBIAN_IMAGE" --build-arg SNAPSHOT="$SNAPSHOT" \
+		"$HERE/containers" > "$WORK/logs/image-qemu-native.log" 2>&1 ||
+		die "qemu-native image failed, see $WORK/logs/image-qemu-native.log"
+	"${pm[@]}" run --rm --memory=4g --memory-swap=4g "${dev[@]}" \
+		-v "$WORK/build:/work/build:ro,Z" -v "$WORK/logs:/work/logs:Z" \
+		-v "$HERE/scripts:/bvm/scripts:ro,Z" -e NATIVE_TIMEOUT="${NATIVE_TIMEOUT:-900}" \
+		$NATIVE_IMAGE bash /bvm/scripts/test-native.sh > "$WORK/logs/test-native.log" 2>&1
+	local rc=$?
+	# As root, the serial log is owned by root: give it back.
+	[ "${pm[0]}" = sudo ] && sudo chown "$(id -u):$(id -g)" "$WORK/logs/test-native-serial.log" 2>/dev/null
+	grep -E '^(accelerator|OK  |FAIL|CLANGTEST_END|BROWSER_VM_NATIVE_TEST|timeout)' "$WORK/logs/test-native.log"
+	[ $rc = 0 ] || die "native test failed, see $WORK/logs/test-native.log and test-native-serial.log"
+}
+
 do_serve() {
 	[ -f "$WORK/site/index.html" ] || die "no site: run the pack step first"
 	echo "Serving $WORK/site on http://127.0.0.1:$PORT/ (Ctrl-C to stop)"
@@ -249,6 +288,7 @@ for s in "$@"; do
 		do_guest && do_pack && do_test || exit 1 ;;
 	images|sources|kernel|clang|qemu|guest|pack|test|serve|clean|publish) "do_$s" || exit 1 ;;
 	test-quick) do_test_quick || exit 1 ;;
+	test-native) do_test_native || exit 1 ;;
 	*) die "unknown step '$s'" ;;
 	esac
 done
