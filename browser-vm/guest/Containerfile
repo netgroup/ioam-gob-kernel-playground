@@ -1,0 +1,82 @@
+# Guest disk of the GOB v3 browser VM.
+#
+# The build context is assembled by build.sh:
+#   files/          gob-init, motd, Makefile.bpf (from browser-vm/guest/)
+#   src/iproute2/   iproute2 at the submodule commit (ip with gobschema)
+#   src/demo/       the GOB demo scripts and the eBPF source
+#   bpftool         built from the GOB kernel tree
+#   vmlinux.h       dumped from the GOB kernel BTF
+#   clang-bpf/      the static BPF-only clang
+#
+# DEBIAN_IMAGE and DEBIAN_SLIM_IMAGE (pinned by digest), SNAPSHOT (the
+# snapshot.debian.org date) and SOURCE_DATE_EPOCH come from build.sh.
+#
+# The paths inside the guest follow the playground QEMU VM (/mnt/shared,
+# /mnt/iproute2/ip/ip, /mnt/scripts/gob-demo), so the demo scripts run
+# unchanged.
+
+ARG DEBIAN_IMAGE=docker.io/library/debian:trixie
+ARG DEBIAN_SLIM_IMAGE=docker.io/library/debian:trixie-slim
+
+FROM ${DEBIAN_IMAGE} AS ipbuild
+ARG SNAPSHOT
+COPY files/apt-snapshot /tmp/apt-snapshot
+RUN sh /tmp/apt-snapshot "$SNAPSHOT" && apt-get install -y --no-install-recommends \
+	build-essential bison flex pkg-config libbpf-dev libelf-dev libmnl-dev libcap-dev
+COPY src/iproute2 /iproute2
+WORKDIR /iproute2
+RUN ./configure && make -j"$(nproc)" SUBDIRS="lib ip" && ./ip/ip -V
+
+FROM ${DEBIAN_SLIM_IMAGE} AS sys
+ARG SNAPSHOT
+COPY files/apt-snapshot /tmp/apt-snapshot
+RUN sh /tmp/apt-snapshot "$SNAPSHOT" && apt-get install -y --no-install-recommends \
+	bash python3 util-linux iputils-ping procps tmux make \
+	libbpf-dev libelf1t64 libmnl0 libcap2 less vim-tiny \
+	&& apt-get clean && rm -rf /var/lib/apt/lists/* /usr/share/doc /usr/share/man /usr/share/info \
+	/tmp/apt-snapshot
+COPY --from=ipbuild /iproute2/ip/ip /usr/sbin/ip
+COPY bpftool /usr/local/sbin/bpftool
+COPY clang-bpf/bin/clang /usr/local/bin/clang
+COPY clang-bpf/lib/clang /usr/local/lib/clang
+COPY vmlinux.h /opt/gob/include/vmlinux.h
+COPY src/demo/src/c/ioam6_gob_recv.bpf.c /opt/gob/src/
+COPY files/Makefile.bpf /opt/gob/src/Makefile
+COPY src/demo/tests/scripts/gob-demo /mnt/scripts/gob-demo
+COPY files/gob-init /sbin/gob-init
+COPY files/motd /etc/motd
+RUN chmod 755 /sbin/gob-init && chmod -R a+rX /mnt/scripts && \
+	mkdir -p /mnt/shared /mnt/iproute2/ip && \
+	ln -s /usr/sbin/ip /mnt/iproute2/ip/ip && \
+	ln -s /usr/local/sbin/bpftool /mnt/shared/bpftool
+
+# Drop what clang -target bpf, ip, bpftool and the demo do not use, then
+# check that clang still builds the demo program and that the tools run.
+RUN rm -f /usr/lib/x86_64-linux-gnu/lib*san.so* /usr/lib/x86_64-linux-gnu/*.a && \
+	rm -rf /usr/lib/gcc /usr/include/c++ /usr/libexec/gcc \
+	/var/lib/apt /var/cache/* /usr/share/zoneinfo /usr/share/locale /usr/share/i18n \
+	/usr/lib/python3.13/ensurepip /usr/lib/python3.13/idlelib /usr/lib/python3.13/pydoc_data \
+	/usr/lib/python3.13/unittest /usr/lib/python3.13/turtledemo /usr/lib/python3.13/tkinter && \
+	make -C /opt/gob/src clean all && ls -l /mnt/shared/ioam6_gob_recv.bpf.o && \
+	clang --version | head -1 && \
+	python3 -c "import json" && ip -V && bpftool version | head -1 && \
+	echo "guest tree: $(du -sxm / | cut -f1) MB"
+
+# ext4 without journal and without reserved blocks, about 10% + 32 MB free.
+# Fixed file times, UUID, hash seed and creation time, so that the image
+# depends only on its content.
+FROM ${DEBIAN_SLIM_IMAGE} AS img
+ARG SNAPSHOT
+ARG SOURCE_DATE_EPOCH
+COPY files/apt-snapshot /tmp/apt-snapshot
+RUN sh /tmp/apt-snapshot "$SNAPSHOT" && apt-get install -y --no-install-recommends e2fsprogs
+COPY --from=sys / /sys-tree/
+RUN find /sys-tree -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} + && \
+	SZ=$(( $(du -sm /sys-tree | cut -f1) * 11 / 10 + 32 )) && \
+	E2FSPROGS_FAKE_TIME=$SOURCE_DATE_EPOCH mke2fs -q -t ext4 -O ^has_journal -m 0 -L gob \
+		-U 6f1b8a4e-0000-4000-8000-00000000c0b3 -E hash_seed=6f1b8a4e-0000-4000-8000-00000000c0b3 \
+		-d /sys-tree /disk.ext4 ${SZ}M && \
+	ls -l /disk.ext4
+
+FROM scratch
+COPY --from=img /disk.ext4 /

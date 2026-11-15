@@ -1,0 +1,60 @@
+#!/bin/bash
+# PID 1 of the GOB browser VM: mount what the demo needs, then a shell on
+# the serial console.
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mountpoint -q /dev || mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts && mount -t devpts devpts /dev/pts
+mount -t tmpfs tmpfs /tmp
+mount -t tmpfs tmpfs /run && mkdir -p /run/netns
+mount -t bpf bpf /sys/fs/bpf
+mount -t tracefs tracefs /sys/kernel/tracing 2>/dev/null
+hostname gob
+ip link set lo up
+export HOME=/root TERM=xterm-256color
+# /mnt/scripts/gob-demo/bin: the gob-* commands of the interactive demo.
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/mnt/scripts/gob-demo/bin
+cd /root
+
+# A serial console has no size (stty size says 0 0): take the size of
+# the browser terminal from the kernel command line, gobterm=COLSxROWS.
+term=$(sed -n 's/.*gobterm=\([0-9]*x[0-9]*\).*/\1/p' /proc/cmdline)
+[ -n "$term" ] && stty -F /dev/ttyS0 cols "${term%x*}" rows "${term#*x}"
+
+# Self test, selected by the page with ?test=1 (kernel command line
+# gobtest=1 gobtest_clang=1): the demo, a clang build, the demo with that
+# build, then the interactive demo. The markers are read by
+# test/run_test.py.
+obj_info() {
+	local o=/mnt/shared/ioam6_gob_recv.bpf.o
+	echo "OBJ $(stat -c '%s bytes, built at %y' $o) $(sha256sum $o | cut -c1-16) $1"
+}
+if grep -qw gobtest=1 /proc/cmdline; then
+	echo "NPROC=$(nproc)"
+	echo "GOBTEST_BEGIN"
+	bash /mnt/scripts/gob-demo/gob-demo-5node-recv-auto.sh
+	echo "GOBTEST_END rc=$?"
+	if grep -qw gobtest_clang=1 /proc/cmdline; then
+		obj_info "(precompiled)"
+		echo "CLANGTEST_BEGIN"
+		start=$(date +%s)
+		make -C /opt/gob/src clean all
+		echo "CLANGTEST_END rc=$? seconds=$(( $(date +%s) - start ))"
+		obj_info "(built in this VM)"
+		# Run the demo again: now it loads the object clang just built.
+		echo "GOBTEST2_BEGIN"
+		bash /mnt/scripts/gob-demo/gob-demo-5node-recv-auto.sh
+		echo "GOBTEST2_END rc=$?"
+		# The interactive demo, as the motd shows it.
+		echo "GOBTEST3_BEGIN"
+		bash /mnt/scripts/gob-demo/gob-demo-5node-recv-tmux.sh setup-only &&
+			gob-encap combined && gob-ping && gob-recv-show &&
+			gob-metric set n3 70 && gob-ping && gob-recv-show
+		echo "GOBTEST3_END rc=$?"
+	fi
+fi
+
+cat /etc/motd
+while true; do
+	setsid -c /bin/bash -l </dev/ttyS0 >/dev/ttyS0 2>&1
+done

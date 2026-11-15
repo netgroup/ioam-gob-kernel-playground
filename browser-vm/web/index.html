@@ -1,0 +1,200 @@
+<!doctype html>
+<!--
+  IOAM GOB v3 kernel in the browser.
+  QEMU compiled to WebAssembly (https://github.com/ktock/qemu-wasm) boots
+  the GOB kernel and a small Debian guest with ip, bpftool and clang.
+  Built by browser-vm/build.sh in
+  https://github.com/netgroup/ioam-gob-kernel-playground
+
+  URL parameters:
+    ?test=1   run the self test (demo, clang build, demo again) at boot
+    ?mem=512M guest memory (QEMU -m)
+    ?tb=500   size in MB of the QEMU translation cache (-accel tcg,tb-size)
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>IOAM GOB v3 in your browser</title>
+    <script src="./coi-serviceworker.js"></script>
+    <link rel="stylesheet" href="./vendor/xterm.css" />
+    <style>
+      :root {
+        --bar: #10233f; --bar-text: #e8eef7; --muted: #9fb3cc;
+        --link: #8cc4ff; --accent: #3fb68b; --warn: #f0b541;
+      }
+      html, body { height: 100%; margin: 0; background: #000; }
+      body { display: flex; flex-direction: column; font-family: system-ui, sans-serif; }
+      header { background: var(--bar); color: var(--bar-text); padding: 10px 16px 8px;
+               border-bottom: 1px solid #24406b; }
+      .row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
+      h1 { font-size: 18px; margin: 0; font-weight: 600; }
+      .sub { color: var(--muted); font-size: 13px; }
+      .links { margin-top: 6px; font-size: 13px; gap: 4px 14px; }
+      .links a { color: var(--link); text-decoration: none; }
+      .links a:hover { text-decoration: underline; }
+      .links .label { color: var(--muted); }
+      .status { margin-top: 8px; font-size: 13px; display: flex; align-items: center; gap: 10px; }
+      .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--warn); flex: none; }
+      .dot.ready { background: var(--accent); }
+      .bar { width: 180px; height: 6px; background: #24406b; border-radius: 3px; overflow: hidden; }
+      .bar > div { height: 100%; width: 0; background: var(--link); }
+      .bar.hidden { display: none; }
+      #terminal { flex: 1; min-height: 0; padding: 4px 0 0 4px; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="row">
+        <h1>IOAM Global Opaque Block (GOB) v3</h1>
+        <span class="sub">the GOB Linux kernel, running in your browser (QEMU compiled to WebAssembly). Nothing runs on a server.</span>
+      </div>
+      <div class="row links">
+        <span><span class="label">Internet-Draft:</span>
+          <a href="https://datatracker.ietf.org/doc/draft-mayer-bpm-ioam-gob/" target="_blank" rel="noopener">draft-mayer-bpm-ioam-gob-00</a>
+          <span class="label">(A. Mayer, S. Salsano, J. Iurman, D. Lopez)</span></span>
+        <span><span class="label">earlier:</span>
+          <a href="https://datatracker.ietf.org/doc/draft-mayer-ioam-gob/" target="_blank" rel="noopener">draft-mayer-ioam-gob</a></span>
+        <span><span class="label">Code:</span>
+          <a href="https://github.com/netgroup/ioam-gob-kernel-playground" target="_blank" rel="noopener">netgroup/ioam-gob-kernel-playground</a></span>
+      </div>
+      <div class="row links">
+        <span><span class="label">IETF Hackathon:</span>
+          <a href="https://wiki.ietf.org/en/meeting/127/hackathon" target="_blank" rel="noopener">IETF 127 San Francisco</a>
+          <span class="label">(GOB namespace-implied mode and backward compatibility)</span></span>
+        <span><a href="https://wiki.ietf.org/en/meeting/126/hackathon" target="_blank" rel="noopener">IETF 126 Vienna</a>
+          <span class="label">(in-network telemetry aggregation,</span>
+          <a href="https://datatracker.ietf.org/doc/slides-126-hackathon-sessd-in-network-telemetry-aggregation-using-ioam-aggregation-trace-and-template-options/" target="_blank" rel="noopener">slides</a><span class="label">)</span></span>
+        <span><a href="./SOURCES.txt" target="_blank">build sources</a></span>
+      </div>
+      <div class="status">
+        <span class="dot" id="dot"></span>
+        <span id="status">loading...</span>
+        <span class="bar hidden" id="bar"><div id="barfill"></div></span>
+      </div>
+    </header>
+    <div id="terminal"></div>
+    <script src="./vendor/xterm.js"></script>
+    <script src="./vendor/xterm-addon-fit.js"></script>
+    <script src="./vendor/xterm-pty.js"></script>
+    <script>
+      // The page shows its own status: ignore the messages of emscripten.
+      var Module = { setStatus: function (s) {} };
+    </script>
+    <script type="module">
+      const status = (s, ready) => {
+        document.getElementById('status').textContent = s;
+        document.getElementById('dot').classList.toggle('ready', !!ready);
+      };
+      const progress = (frac) => {
+        const bar = document.getElementById('bar');
+        bar.classList.toggle('hidden', frac === null);
+        if (frac !== null)
+          document.getElementById('barfill').style.width = (100 * frac).toFixed(1) + '%';
+      };
+
+      // Download the gzip parts, decompress them in a stream, and hand the
+      // whole package to emscripten through getPreloadedPackage.
+      async function fetchPackage() {
+        const man = await (await fetch('./data/manifest.json')).json();
+        let got = 0;
+        let idx = 0;
+        let reader = null;
+        const parts = new ReadableStream({
+          async pull(ctl) {
+            for (;;) {
+              if (!reader) {
+                if (idx >= man.parts.length) { ctl.close(); return; }
+                const r = await fetch('./data/' + man.parts[idx++]);
+                if (!r.ok) throw new Error('fetch ' + r.url + ': ' + r.status);
+                reader = r.body.getReader();
+              }
+              const { done, value } = await reader.read();
+              if (done) { reader = null; continue; }
+              got += value.length;
+              status(`Downloading the VM: ${(got / 1048576).toFixed(0)} / ${(man.gz_size / 1048576).toFixed(0)} MB (once per visit)`);
+              progress(got / man.gz_size);
+              ctl.enqueue(value);
+              return;
+            }
+          }
+        });
+        const out = new Uint8Array(man.size);
+        let off = 0;
+        const dec = parts.pipeThrough(new DecompressionStream('gzip')).getReader();
+        for (;;) {
+          const { done, value } = await dec.read();
+          if (done) break;
+          out.set(value, off);
+          off += value.length;
+        }
+        if (off !== man.size) throw new Error(`package size ${off} != ${man.size}`);
+        return out.buffer;
+      }
+
+      function loadScript(src) {
+        return new Promise((ok, ko) => {
+          const s = document.createElement('script');
+          s.src = src; s.onload = ok; s.onerror = ko;
+          document.head.appendChild(s);
+        });
+      }
+
+      if (!self.crossOriginIsolated) {
+        status('Preparing the page (it reloads once by itself)...');
+      } else {
+        // The terminal fills the space under the bar. Its size goes to the
+        // guest on the kernel command line, because a serial console does
+        // not carry it (stty size would say 0 0).
+        const xterm = new Terminal({ scrollback: 100000, fontSize: 14 });
+        const fit = new FitAddon.FitAddon();
+        xterm.loadAddon(fit);
+        xterm.open(document.getElementById('terminal'));
+        fit.fit();
+        window.gobTerm = xterm;
+        window.gobTermSize = { cols: xterm.cols, rows: xterm.rows };
+
+        try {
+          const pkg = await fetchPackage();
+          Module['getPreloadedPackage'] = (name, size) => pkg;
+        } catch (e) {
+          status('Download failed: ' + e.message + '. Reload the page to retry.');
+          throw e;
+        }
+        progress(null);
+        status('Starting QEMU...');
+        await loadScript('./load.js');
+        await import('./module.js');
+        const { default: initEmscriptenModule } = await import('./out.js');
+
+        const { master, slave } = openpty();
+        xterm.loadAddon(master);
+
+        Module.pty = slave;
+        Module['mainScriptUrlOrBlob'] = new URL('./out.js', location.href).href;
+        status('Booting the GOB kernel (about half a minute)...');
+        const instance = await initEmscriptenModule(Module);
+        var oldPoll = Module['TTY'].stream_ops.poll;
+        var pty = Module['pty'];
+        Module['TTY'].stream_ops.poll = function (stream, timeout) {
+          if (!pty.readable)
+            return (pty.readable ? 1 : 0) | (pty.writable ? 4 : 0);
+          return oldPoll.call(stream, timeout);
+        };
+
+        // Ready when the shell prompt shows up.
+        const ready = setInterval(() => {
+          const b = xterm.buffer.active;
+          for (let i = 0; i < b.length; i++) {
+            if (b.getLine(i).translateToString(true).startsWith('root@gob:')) {
+              status('Ready: click in the terminal and type. The commands to try are above the prompt.', true);
+              clearInterval(ready);
+              xterm.focus();
+              return;
+            }
+          }
+        }, 1000);
+      }
+    </script>
+  </body>
+</html>

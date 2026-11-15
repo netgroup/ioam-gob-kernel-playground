@@ -1,0 +1,15 @@
+# Build the GOB demo eBPF program inside the VM.
+# The object goes where the demo scripts load it from.
+CLANG ?= clang
+OUT := /mnt/shared
+INCLUDES := -I/opt/gob/include
+
+all: $(OUT)/ioam6_gob_recv.bpf.o
+
+$(OUT)/%.bpf.o: %.bpf.c
+	$(CLANG) -g -Wall -O2 -target bpf -D__TARGET_ARCH_x86 $(INCLUDES) -c $< -o $@
+
+clean:
+	rm -f $(OUT)/ioam6_gob_recv.bpf.o
+
+.PHONY: all clean

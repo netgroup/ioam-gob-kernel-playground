@@ -1,0 +1,19 @@
+
+  IOAM GOB v3 kernel, running in your browser (QEMU compiled to WebAssembly).
+
+  Run the 5-node GOB demo (7 network namespaces, about one minute):
+    bash /mnt/scripts/gob-demo/gob-demo-5node-recv-auto.sh
+
+  Or play with it step by step: set the topology up, then use the gob-*
+  commands (gob-help lists them):
+    bash /mnt/scripts/gob-demo/gob-demo-5node-recv-tmux.sh setup-only
+    gob-encap combined ; gob-ping ; gob-recv-show
+    gob-metric set n3 70 ; gob-ping ; gob-recv-show
+
+  Build the demo eBPF program yourself with clang (about one minute):
+    cd /opt/gob/src && make
+  The object goes to /mnt/shared/ioam6_gob_recv.bpf.o, the file the demo
+  loads: run the demo again to use your build.
+
+  Everything lives in memory: reloading the page starts from scratch.
+

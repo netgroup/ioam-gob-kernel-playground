@@ -1,0 +1,17 @@
+#!/bin/sh
+# Point apt at snapshot.debian.org at a fixed date, so that every build
+# installs the same package versions, then run apt-get update.
+# Usage: apt-snapshot YYYYMMDDTHHMMSSZ
+set -e
+S=${1:?usage: apt-snapshot YYYYMMDDTHHMMSSZ}
+F=/etc/apt/sources.list.d/debian.sources
+sed -i \
+	-e "s#^URIs: http://deb.debian.org/debian-security\$#URIs: http://snapshot.debian.org/archive/debian-security/$S#" \
+	-e "s#^URIs: http://deb.debian.org/debian\$#URIs: http://snapshot.debian.org/archive/debian/$S#" \
+	$F
+if [ "$(grep -c '^URIs: http://snapshot.debian.org/archive/' $F)" != 2 ]; then
+	echo "apt-snapshot: unexpected $F:" >&2
+	cat $F >&2
+	exit 1
+fi
+apt-get -o Acquire::Check-Valid-Until=false -o Acquire::Retries=5 update
