@@ -9,6 +9,11 @@ set)
     v="$3"
     "$BT" map update pinned "$PIN" key $key 0 0 0 \
         value $((v & 255)) $(((v >> 8) & 255)) $(((v >> 16) & 255)) $(((v >> 24) & 255))
+    rc=$?
+    # Inside the tmux dashboard, tell its panes to refresh now (they wait
+    # for this signal instead of polling).
+    if [ -n "${TMUX:-}" ]; then tmux wait-for -S gob-refresh; fi
+    exit $rc
     ;;
 get)
     # Plain bpftool output, read with bash only: starting Python costs

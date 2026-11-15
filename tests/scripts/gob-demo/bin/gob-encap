@@ -37,3 +37,6 @@ off)
 *)
     echo "usage: gob-encap gob|combined|trad|off" ;;
 esac
+# Inside the tmux dashboard, tell its panes to refresh now (they wait for
+# this signal instead of polling).
+if [ -n "${TMUX:-}" ]; then tmux wait-for -S gob-refresh; fi

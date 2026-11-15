@@ -45,6 +45,11 @@ readonly BINDIR="/mnt/scripts/gob-demo/bin"
 readonly NODEDATA_FILE="/tmp/ioam-nodedata.txt"
 readonly SESSION="gobdemo"
 readonly MODE="${1:-tmux}"
+# The dashboard panes refresh when gob-ping, gob-metric set or gob-encap
+# signal them (tmux wait-for gob-refresh), and at the latest every REFRESH
+# seconds. On a slow machine, such as the browser VM of browser-vm/, set
+# GOB_DEMO_REFRESH higher.
+readonly REFRESH="${GOB_DEMO_REFRESH:-1}"
 
 if [[ ! -e "${BPF_OBJ}" ]]; then
     echo "ERROR: BPF object not found: ${BPF_OBJ}"
@@ -249,19 +254,21 @@ i=1
 for p in "${top}" "${n2}" "${n3}" "${n4}" "${n5}"; do
     tmux send-keys -t "${p}" "export PATH=${BINDIR}:\$PATH" C-m
     tmux send-keys -t "${p}" \
-        "watch -t -n1 \"echo n${i}  metric X:; gob-metric get n${i}\"" C-m
+        "while :; do clear; echo n${i}  metric X:; gob-metric get n${i}; timeout ${REFRESH} tmux wait-for gob-refresh; done" C-m
     i=$((i + 1))
 done
 # bottom-left -> received view
 tmux send-keys -t "${bot}" "export PATH=${BINDIR}:\$PATH" C-m
 tmux send-keys -t "${bot}" \
-    "watch -t -n1 'gob-recv-show; echo; cat ${NODEDATA_FILE} 2>/dev/null'" C-m
+    "while :; do clear; gob-recv-show; echo; cat ${NODEDATA_FILE} 2>/dev/null; timeout ${REFRESH} tmux wait-for gob-refresh; done" C-m
 # bottom-right -> control shell + cheat-sheet
 tmux send-keys -t "${ctl}" "export PATH=${BINDIR}:\$PATH" C-m
 tmux send-keys -t "${ctl}" \
     "clear; echo 'CONTROL panel'; \
      echo 'type  gob-help  for the list of commands'; \
-     echo; echo 'quick start:  gob-encap combined ; gob-ping'" C-m
+     echo; echo 'quick start:  gob-encap combined ; gob-ping'; \
+     echo 'screen garbled? Ctrl-b r redraws it'" C-m
+tmux select-pane -t "${ctl}"
 
 echo "tmux session '${SESSION}' ready. Attach with: tmux attach -t ${SESSION}"
 echo "(detach with Ctrl-b d; run '$0 clean' or kill the session to tear down)"
