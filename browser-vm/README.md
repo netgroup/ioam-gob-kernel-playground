@@ -238,8 +238,13 @@ then `tmux attach -t gobdemo` (detach with `Ctrl-b d`). The five panes at
 the top show the metric of each node, RECEIVED shows what each node
 received, and CONTROL, where the cursor starts, takes the `gob-*`
 commands. The panes refresh after each `gob-ping`, `gob-metric set` and
-`gob-encap`, and at the latest every 30 s in the browser VM
-(`GOB_DEMO_REFRESH`). `Ctrl-b r` redraws the whole screen.
+`gob-encap`, on `gob-refresh` or `Ctrl-b R`, at each packet that reaches
+n5 (RECEIVED follows a ping live), and every 15 s in the browser VM
+(`GOB_DEMO_REFRESH`, set in `/etc/profile.d/gob-demo.sh`). One process,
+`gob-dash-update`, reads the maps for all the panes and sends each pane its
+text through a FIFO. A pane is redrawn only when its text changed.
+`Ctrl-b r` redraws the whole screen. For another interval: `GOB_DEMO_REFRESH=5
+gob-demo-5node-recv-tmux.sh` (0 means only on demand).
 
 Build the eBPF program yourself, then run the demo again with your build:
 
@@ -458,6 +463,22 @@ fix.
   `gob-recv-show` read the plain `bpftool` output in bash (0.5 s and 1.2 s,
   same output), and the panes refresh when a `gob-*` command signals them
   (`tmux wait-for`) instead of every second.
+- **RECEIVED did not follow a ping, and the node-data table stayed
+  empty.** At each refresh each of the six panes started `bpftool`,
+  `timeout` and a tmux client. With a 10 s refresh the VM was always
+  busy (load 4 to 5, 0% idle), and after `gob-ping 30` RECEIVED went from
+  0 to 30 packets in one step, 37 s later. The node-data collector, in
+  Python, still showed "(waiting for a ping)" after a ping. Fix: one
+  process, `gob-dash-update`, runs one `bpftool batch` per refresh for
+  both maps and sends each pane its text through a FIFO, where the pane
+  reads it with bash builtins. The collector is now bash, reads
+  `stdbuf -oL ip ioam monitor` (without `-oL` the output of `ip` stays in
+  its buffer), and wakes the dashboard at each packet. Requests that
+  arrive during a refresh are served together, and after a refresh it
+  pauses as long as the refresh took. Measured in headless Chromium:
+  during `gob-ping 30` RECEIVED changes about every 2 s and shows 30
+  after 13 s, a metric change shows in about 2 s, and the idle VM with the
+  dashboard is about 15% busy.
 - **A status bar with the CPU and memory of the VM was tried and
   dropped.** The guest wrote its numbers to a 9p share (`-virtfs`) every
   2 s. The share mounted, but creating a file in it failed with "Channel
