@@ -243,8 +243,10 @@ n5 (RECEIVED follows a ping live), and every 15 s in the browser VM
 (`GOB_DEMO_REFRESH`, set in `/etc/profile.d/gob-demo.sh`). One process,
 `gob-dash-update`, reads the maps for all the panes and sends each pane its
 text through a FIFO. A pane is redrawn only when its text changed.
-`Ctrl-b r` redraws the whole screen. For another interval: `GOB_DEMO_REFRESH=5
-gob-demo-5node-recv-tmux.sh` (0 means only on demand).
+`Ctrl-b r` redraws the whole screen. For another interval:
+`GOB_DEMO_REFRESH=5 gob-demo-5node-recv-tmux.sh` (0 means only on demand).
+`gob-clean`, from the CONTROL pane or after `Ctrl-b d`, closes the
+dashboard and removes the namespaces and the maps.
 
 Build the eBPF program yourself, then run the demo again with your build:
 

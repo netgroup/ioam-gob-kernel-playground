@@ -8,7 +8,8 @@
        gob-encap combined ; gob-ping 10   RECEIVED fills during the ping
        gob-metric set n3 70 ; gob-ping    the change reaches n4 and n5
        gob-help                           all the commands
-     Ctrl-b d leaves tmux, Ctrl-b R refreshes the panes.
+     Ctrl-b d leaves tmux, Ctrl-b R refreshes the panes, gob-clean closes
+     the dashboard and removes the namespaces.
 
   2. The automatic check (about one minute):
        gob-demo-5node-recv-auto.sh
