@@ -13,6 +13,7 @@ GOB demo -- available commands:
   gob-metric get nN     read node N metric X
   gob-recv-show         table of what each node received (gob_recv map)
   gob-refresh           refresh the dashboard panes now (also Ctrl-b R)
+  gob-clean             close the dashboard, remove the namespaces and maps
   gob-help              this help
 
 typical demo:

@@ -29,7 +29,8 @@ Topology (7 network namespaces, a line):
       gob-demo-5node-recv-auto.sh   non-interactive validation
       bin/                          control helpers: gob-metric, gob-encap,
                                     gob-ping, gob-recv-show, gob-refresh,
-                                    gob-help; the dashboard: gob-dash-update
+                                    gob-clean, gob-help; the dashboard:
+                                    gob-dash-update
                                     (reads the maps, feeds the panes),
                                     gob-pane (one pane), and
                                     ioam-nodedata-collect (background decoder
@@ -82,6 +83,8 @@ In the CONTROL pane type `gob-help` for the command list. Typical flow:
     gob-encap gob                    # only the GOB: node-data table empties
     gob-encap trad                   # only node-data: GOB table stops updating
     gob-encap off                    # plain fallback: net works, no IOAM
+    gob-clean                        # close the dashboard, remove the
+                                     # namespaces and the maps
 
 Non-interactive check:
 

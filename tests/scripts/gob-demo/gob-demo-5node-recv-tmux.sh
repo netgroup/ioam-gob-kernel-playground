@@ -21,6 +21,7 @@
 #   (no arg)     set up + generate helpers + open the tmux dashboard
 #   test         set up + generate helpers + run a non-interactive check
 #   setup-only   set up + generate helpers, leave everything up, no tmux
+#   clean        remove everything: tmux session, namespaces, maps (gob-clean)
 #
 # Control helpers (generated under /mnt/scripts/gob-demo-bin, thin wrappers
 # over the same bpftool/ip commands the -auto test uses):
@@ -71,17 +72,23 @@ done
 #------------------------------------------------------------
 cleanup() {
     echo "=== cleanup ==="
-    tmux kill-session -t "${SESSION}" 2>/dev/null || true
+    # The processes first, then the namespaces they run in. The tmux session
+    # last: gob-clean may run inside it, and closing it ends gob-clean too.
+    pkill -f ioam-nodedata-collect 2>/dev/null || true
+    pkill -f gob-dash-update 2>/dev/null || true
     for ns in h1 n1 n2 n3 n4 n5 h2; do
         ip netns delete "$ns" 2>/dev/null || true
     done
     rm -f "${METRIC_PIN}" "${RECV_PIN}" 2>/dev/null || true
-    pkill -f ioam-nodedata-collect 2>/dev/null || true
-    pkill -f gob-dash-update 2>/dev/null || true
     rm -f "${NODEDATA_FILE}" 2>/dev/null || true
     rm -rf "${DASH_DIR}" 2>/dev/null || true
+    tmux kill-session -t "${SESSION}" 2>/dev/null || true
 }
 cleanup
+if [ "${MODE}" = "clean" ]; then
+    echo "removed: tmux session, namespaces, maps"
+    exit 0
+fi
 
 #------------------------------------------------------------
 # 2. Namespaces, veth links, addressing
@@ -274,8 +281,9 @@ tmux send-keys -t "${ctl}" \
     "clear; echo 'CONTROL panel'; \
      echo 'type  gob-help  for the list of commands'; \
      echo; echo 'quick start:  gob-encap combined ; gob-ping'; \
-     echo 'Ctrl-b R refreshes the panes, Ctrl-b r redraws the screen'" C-m
+     echo 'Ctrl-b R refreshes the panes, Ctrl-b r redraws the screen'; \
+     echo 'gob-clean closes the dashboard and removes everything'" C-m
 tmux select-pane -t "${ctl}"
 
 echo "tmux session '${SESSION}' ready. Attach with: tmux attach -t ${SESSION}"
-echo "(detach with Ctrl-b d; run '$0 clean' or kill the session to tear down)"
+echo "(detach with Ctrl-b d; gob-clean removes everything)"

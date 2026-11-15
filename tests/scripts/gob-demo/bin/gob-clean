@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# gob-clean   -- remove the demo: the tmux dashboard, the namespaces, the
+# maps. It works from the CONTROL pane too: the dashboard closes last.
+exec "${0%/*}/../gob-demo-5node-recv-tmux.sh" clean
