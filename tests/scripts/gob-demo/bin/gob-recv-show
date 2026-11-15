@@ -3,34 +3,51 @@
 # received from the previous node)
 BT="/mnt/shared/bpftool"
 PIN="/sys/fs/bpf/tc/globals/gob_recv"
+
+# gob_recv_format DUMP: put in GOB_RECV_TXT the table for DUMP, the output
+# of bpftool map dump. gob-dash-update sources this file and calls it, so
+# the dashboard needs no new process to format the table.
 # Plain bpftool output, read with bash only: starting Python costs seconds
 # in the browser VM. With BTF, bpftool prints one "field": N per line, in
 # the order of struct gob_recv_entry (min, max, sum, count, pkts).
-out=$("$BT" map dump pinned "$PIN" 2>/dev/null)
-if [ -z "$out" ]; then
-    echo "(no data)"
-    exit
+gob_recv_format() {
+    local l n k=-1 mn mx sm ct row lines IFS=$'\n'
+    if [ -z "$1" ]; then
+        GOB_RECV_TXT="(no data)"
+        return
+    fi
+    GOB_RECV_TXT="received from the previous node (per node id):
+  node |  min |  max |  sum | count | pkts
+  -----+------+------+------+-------+------"
+    # split in memory: a here-string is read back one byte at a time
+    lines=($1)
+    # "min": 10, -> min:10 (glob matching: a bash regex costs a regcomp
+    # per line, a lot in the browser VM)
+    for l in "${lines[@]}"; do
+        l=${l//[\" ,]/}
+        n=${l#*:}
+        case $l in
+        key:*) k=$n ;;
+        min:*) mn=$n ;;
+        max:*) mx=$n ;;
+        sum:*) sm=$n ;;
+        count:*) ct=$n ;;
+        pkts:*)
+            ((k >= 1 && k <= 5)) || continue
+            if ((k == 1)); then
+                printf -v row "  %4d | %4s | %4s | %4s | %5s | %4d" "$k" - - - - "$n"
+            else
+                printf -v row "  %4d | %4d | %4d | %4d | %5d | %4d" "$k" "$mn" "$mx" "$sm" "$ct" "$n"
+            fi
+            GOB_RECV_TXT+=$'\n'"$row"
+            ;;
+        esac
+    done
+}
+
+# sourced: only define the function
+if [[ ${BASH_SOURCE[0]} != "$0" ]]; then
+    return 0
 fi
-echo "received from the previous node (per node id):"
-echo "  node |  min |  max |  sum | count | pkts"
-echo "  -----+------+------+------+-------+------"
-k=-1
-while IFS= read -r l; do
-    [[ $l =~ \"(key|min|max|sum|count|pkts)\":\ ([0-9]+) ]] || continue
-    n=${BASH_REMATCH[2]}
-    case ${BASH_REMATCH[1]} in
-    key) k=$n ;;
-    min) mn=$n ;;
-    max) mx=$n ;;
-    sum) sm=$n ;;
-    count) ct=$n ;;
-    pkts)
-        ((k >= 1 && k <= 5)) || continue
-        if ((k == 1)); then
-            printf "  %4d | %4s | %4s | %4s | %5s | %4d\n" "$k" - - - - "$n"
-        else
-            printf "  %4d | %4d | %4d | %4d | %5d | %4d\n" "$k" "$mn" "$mx" "$sm" "$ct" "$n"
-        fi
-        ;;
-    esac
-done <<< "$out"
+gob_recv_format "$("$BT" map dump pinned "$PIN" 2>/dev/null)"
+printf '%s\n' "$GOB_RECV_TXT"

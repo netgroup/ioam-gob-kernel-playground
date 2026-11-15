@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# gob-dash-update DIR REFRESH NODEDATA   -- feed the panes of the tmux dashboard
+#
+# The one process that reads the maps for the dashboard: started by
+# gob-demo-5node-recv-tmux.sh, it writes the text of each pane that changed
+# to the FIFO of that pane (DIR/n1..n5, DIR/recv), and gob-pane prints it.
+# A pane whose text did not change is not redrawn.
+#
+# It wakes up on a message in the FIFO DIR/trigger: "all" from gob-refresh
+# (gob-metric set, gob-encap and gob-ping send it, Ctrl-b R too), "recv"
+# from ioam-nodedata-collect at each packet. It also wakes up every REFRESH
+# seconds (0: never). Messages that arrive during an update are served
+# together by the next one, and after an update it waits as long as the
+# update took: on a slow machine (the browser VM) it never takes more than
+# half of the CPU, on a fast one the panes follow at once.
+dir="$1"
+refresh="${2:-0}"
+nodedata="${3:-/tmp/ioam-nodedata.txt}"
+BT="/mnt/shared/bpftool"
+METRIC_PIN="/sys/fs/bpf/tc/globals/gob_metric"
+RECV_PIN="/sys/fs/bpf/tc/globals/gob_recv"
+source "${0%/*}/gob-recv-show"
+
+# All the FIFOs are opened read-write: opening never blocks, and a text
+# sent before its pane opened the FIFO waits there for it.
+exec 3<>"${dir}/trigger" 4<>"${dir}/idle"
+declare -A last fd
+for p in n1 n2 n3 n4 n5 recv; do
+    exec {f}<>"${dir}/${p}"
+    fd[$p]=$f
+done
+
+# send PANE TEXT: write TEXT to the pane, unless it is what the pane shows.
+send() {
+    if [[ ${last[$1]+set} && ${last[$1]} == "$2" ]]; then
+        return
+    fi
+    last[$1]=$2
+    printf '%s\0' "$2" >&"${fd[$1]}"
+}
+
+# bt_dump PIN...: dump the pinned maps with one bpftool (bpftool batch),
+# DUMPS[i] = the dump of the i-th map. Its output is fully buffered and
+# reaches us at exit in a write or two: few process switches, each costly
+# in the browser VM. With BTF a map dump ends with a line "]" (without BTF
+# with "Found N elements").
+bt_dump() {
+    local cmds l cur= i=0 lines IFS=$'\n'
+    printf -v cmds 'map dump pinned %s\n' "$@"
+    lines=($("$BT" batch file - 2>/dev/null <<< "$cmds"))
+    DUMPS=()
+    for l in "${lines[@]}"; do
+        cur+=$l$'\n'
+        if [[ $l == "]" || $l == "Found "* ]]; then
+            DUMPS[i++]=$cur
+            cur=
+        fi
+    done
+}
+
+# update all|recv: the metric panes (all only) and the RECEIVED pane.
+update() {
+    local l key= nd= lines IFS=$'\n'
+    if [ "$1" = all ]; then
+        # With BTF, bpftool prints "key": K and "value": V on separate lines.
+        bt_dump "$METRIC_PIN" "$RECV_PIN"
+        lines=(${DUMPS[0]})
+        for l in "${lines[@]}"; do
+            l=${l//[\" ,]/}
+            case $l in
+            key:*)
+                key=${l#key:}
+                ;;
+            value:*)
+                if [[ -n $key ]] && ((key < 5)); then
+                    send "n$((key + 1))" "n$((key + 1))  metric X:"$'\n'"${l#value:}"
+                fi
+                ;;
+            esac
+        done
+    fi
+    if [ "$1" = all ]; then
+        gob_recv_format "${DUMPS[1]}"
+    else
+        bt_dump "$RECV_PIN"
+        gob_recv_format "${DUMPS[0]}"
+    fi
+    read -r -d '' nd < "$nodedata"
+    send recv "${GOB_RECV_TXT}"$'\n\n'"${nd%$'\n'}"
+}
+
+what=all
+while :; do
+    t0=${EPOCHREALTIME//[.,]/}
+    update "$what"
+    t1=${EPOCHREALTIME//[.,]/}
+    # GOB_DASH_LOG=1 in the environment of the demo: log each update
+    if [[ -n ${GOB_DASH_LOG-} ]]; then
+        printf '%s %s %d\n' "$EPOCHREALTIME" "$what" $(((t1 - t0) / 1000)) >> "${dir}/log"
+    fi
+    # wait as long as the update took, at most 5 s
+    dt=$((t1 - t0 > 5000000 ? 5000000 : t1 - t0))
+    printf -v pause '%d.%06d' $((dt / 1000000)) $((dt % 1000000))
+    read -r -t "$pause" -u 4 _
+    if [ "$refresh" != 0 ]; then
+        read -r -d '' -t "$refresh" -u 3 msg
+        rc=$?
+    else
+        read -r -d '' -u 3 msg
+        rc=$?
+    fi
+    what=recv
+    if ((rc > 128)) || [ "$msg" = all ]; then
+        what=all
+    fi
+    # serve together the messages that are already there
+    while read -r -t 0 -u 3; do
+        read -r -d '' -u 3 msg
+        if [ "$msg" = all ]; then
+            what=all
+        fi
+    done
+done

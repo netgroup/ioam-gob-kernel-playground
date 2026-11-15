@@ -1,67 +1,56 @@
-#!/usr/bin/env python3
-# ioam-nodedata-collect [node] [outfile]
+#!/usr/bin/env bash
+# ioam-nodedata-collect [node] [outfile] [trigger]
 #
 # Collect ONLY the traditional IOAM node-data (not the GOB). Stream
 # `ip ioam monitor` in <node>'s netns, decode the node-data (trace type
 # Hop_Lim + node_id, 4 bytes per hop) and keep <outfile> updated with the
-# latest decoded table. Run in background by the demo setup; the RECEIVED
-# pane cats <outfile> under the GOB table. The GOB itself is collected
-# separately by the eBPF program into the gob_recv map (gob-recv-show).
+# latest decoded table. If <trigger> is given (the FIFO of gob-dash-update),
+# tell the dashboard at each packet, so the RECEIVED pane follows a ping
+# live. The GOB itself is collected separately by the eBPF program into the
+# gob_recv map (gob-recv-show).
 #
-# A pty is used so `ip ioam monitor` (which prints with stdio) is line
-# buffered and we see each event as it arrives.
-import os
-import re
-import pty
-import sys
-import select
+# Bash only: starting Python costs seconds in the browser VM. ip prints
+# with stdio, which is fully buffered on a pipe: stdbuf -oL makes it line
+# buffered, so each event arrives when it happens. nsenter execs ip in the
+# same process (ip netns exec would fork it), so killing MON_PID stops it.
+node="${1:-n5}"
+outfile="${2:-/tmp/ioam-nodedata.txt}"
+trigger="${3:-}"
+IP="/mnt/iproute2/ip/ip"
 
-node = sys.argv[1] if len(sys.argv) > 1 else "n5"
-outfile = sys.argv[2] if len(sys.argv) > 2 else "/tmp/ioam-nodedata.txt"
-IP = "/mnt/iproute2/ip/ip"
-cmd = ["ip", "netns", "exec", node, IP, "ioam", "monitor"]
+coproc MON { exec nsenter --net="/var/run/netns/${node}" stdbuf -oL "$IP" ioam monitor; }
+trap 'kill "$MON_PID" 2>/dev/null; exit 0' TERM INT HUP
 
-rex = re.compile(rb"NodeLen=(\d+) Type=(\S+) Data=([0-9a-fA-F]*)")
-
-pid, fd = pty.fork()
-if pid == 0:
-    os.execvp(cmd[0], cmd)
-    os._exit(127)
-
-buf = b""
-while True:
-    select.select([fd], [], [])
-    try:
-        chunk = os.read(fd, 4096)
-    except OSError:
-        break
-    if not chunk:
-        break
-    buf += chunk
-    while b"\n" in buf:
-        line, buf = buf.split(b"\n", 1)
-        m = rex.search(line)
-        if not m:
-            continue
-        nodelen = int(m.group(1))
-        raw = bytes.fromhex(m.group(3).decode())
-        wl = nodelen * 4
-        rows = []
-        if wl:
-            for i in range(0, len(raw), wl):
-                w = raw[i:i + wl]
-                if len(w) < 4:
-                    continue
-                rows.append((int.from_bytes(w[1:4], "big"), w[0]))
-        out = ["node-data received at %s (newest first):" % node,
-               "  node_id | hop_lim",
-               "  --------+--------"]
-        if rows:
-            for nid, hop in rows:
-                out.append("  %7d | %7d" % (nid, hop))
-        else:
-            out.append("  (no node-data)")
-        tmp = outfile + ".tmp"
-        with open(tmp, "w") as f:
-            f.write("\n".join(out) + "\n")
-        os.replace(tmp, outfile)
+prev=
+while IFS= read -r -u "${MON[0]}" l; do
+    # the same trace as the packet before: only tell the dashboard
+    if [[ $l == "$prev" ]]; then
+        if [ -n "$trigger" ]; then
+            printf 'recv\0' 1<>"$trigger"
+        fi
+        continue
+    fi
+    prev=$l
+    [[ $l =~ NodeLen=([0-9]+)\ Type=[^\ ]+\ Data=([0-9a-fA-F]*) ]] || continue
+    wl=$((BASH_REMATCH[1] * 8))
+    data=${BASH_REMATCH[2]}
+    out="node-data received at ${node} (newest first):
+  node_id | hop_lim
+  --------+--------"
+    rows=0
+    # one node-data entry every wl hex digits: hop_lim (1 byte), node_id (3)
+    if ((wl)); then
+        for ((i = 0; i + 8 <= ${#data}; i += wl)); do
+            printf -v row "  %7d | %7d" $((16#${data:i+2:6})) $((16#${data:i:2}))
+            out+=$'\n'"$row"
+            rows=$((rows + 1))
+        done
+    fi
+    if ((rows == 0)); then
+        out+=$'\n'"  (no node-data)"
+    fi
+    printf '%s\n' "$out" > "$outfile"
+    if [ -n "$trigger" ]; then
+        printf 'recv\0' 1<>"$trigger"
+    fi
+done

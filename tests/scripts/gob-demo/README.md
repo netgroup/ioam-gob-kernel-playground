@@ -28,7 +28,10 @@ Topology (7 network namespaces, a line):
       gob-demo-5node-recv-tmux.sh   interactive tmux dashboard
       gob-demo-5node-recv-auto.sh   non-interactive validation
       bin/                          control helpers: gob-metric, gob-encap,
-                                    gob-ping, gob-recv-show, gob-help, and
+                                    gob-ping, gob-recv-show, gob-refresh,
+                                    gob-help; the dashboard: gob-dash-update
+                                    (reads the maps, feeds the panes),
+                                    gob-pane (one pane), and
                                     ioam-nodedata-collect (background decoder
                                     for the traditional IOAM node-data at n5)
 
@@ -50,7 +53,8 @@ Inside the ioam-kernel-builder container:
 - the GOB-aware iproute2 at `/mnt/iproute2/ip/ip` (`ip ioam gobschema`,
   `encap ioam6 ... gobsize`);
 - `bpftool` at `/mnt/shared/bpftool`;
-- `tmux`, `python3`, `nsenter`.
+- `tmux`, `nsenter`, `stdbuf` (coreutils); `python3` for
+  gob-demo-5node-recv-auto.sh.
 
 The scripts check for the missing pieces and stop with a clear message.
 
@@ -62,6 +66,13 @@ The scripts check for the missing pieces and stop with a clear message.
 The RECEIVED pane shows two tables. The top one is the GOB (from the
 gob_recv map, filled by the eBPF program). The bottom one is the traditional
 IOAM node-data seen at n5 (decoded by the background ioam-nodedata-collect).
+
+One process, gob-dash-update, reads the maps for all the panes and sends
+each pane its text through a FIFO in /tmp/gob-dash; a pane is redrawn only
+when its text changed. It refreshes after gob-ping, gob-metric set and
+gob-encap, on gob-refresh or Ctrl-b R, at each packet that reaches n5 (so
+RECEIVED follows a ping live), and every GOB_DEMO_REFRESH seconds (default
+1, 0 means only on demand).
 
 In the CONTROL pane type `gob-help` for the command list. Typical flow:
 

@@ -12,7 +12,7 @@ set)
     rc=$?
     # Inside the tmux dashboard, tell its panes to refresh now (they wait
     # for this signal instead of polling).
-    if [ -n "${TMUX:-}" ]; then tmux wait-for -S gob-refresh; fi
+    if [ -n "${TMUX:-}" ]; then "${0%/*}/gob-refresh"; fi
     exit $rc
     ;;
 get)

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# gob-refresh   -- refresh the panes of the tmux dashboard now (Ctrl-b R does
+# the same): wake up gob-dash-update, the process that feeds them.
+trigger="/tmp/gob-dash/trigger"
+if [ ! -p "$trigger" ]; then
+    echo "gob-refresh: no tmux dashboard running"
+    exit 0
+fi
+printf 'all\0' 1<>"$trigger"

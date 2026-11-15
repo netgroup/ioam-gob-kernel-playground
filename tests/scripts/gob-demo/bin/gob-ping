@@ -7,10 +7,13 @@
 count="${1:-3}"
 hl=""
 [ -n "${2:-}" ] && hl="-t $2"
+if [ -z "${TMUX:-}" ]; then
+    exec ip netns exec h1 ping -6 -c "$count" -i 0.3 $hl -I fdcc::1 fdcc::2
+fi
+# Inside the tmux dashboard the RECEIVED pane follows the ping live (the
+# node-data collector wakes the dashboard up at each packet). At the end,
+# refresh all the panes once more.
 ip netns exec h1 ping -6 -c "$count" -i 0.3 $hl -I fdcc::1 fdcc::2
 rc=$?
-# Inside the tmux dashboard, tell its panes to refresh now (they wait for
-# this signal instead of polling).
-if [ -n "${TMUX:-}" ]; then tmux wait-for -S gob-refresh; fi
-if [ -n "${TMUX:-}" ]; then { sleep 3; tmux wait-for -S gob-refresh; } >/dev/null 2>&1 & fi
+"${0%/*}/gob-refresh"
 exit $rc

@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# gob-pane FIFO   -- one pane of the tmux dashboard: print each text that
+# gob-dash-update writes to FIFO (texts end with a NUL byte). Bash builtins
+# only, so a refresh starts no process here.
+exec 3<>"$1"
+printf '\e[?25l'
+while IFS= read -r -d '' -u 3 txt; do
+    printf '\e[H\e[2J%s' "$txt"
+done

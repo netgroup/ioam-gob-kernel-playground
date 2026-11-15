@@ -45,10 +45,11 @@ readonly BINDIR="/mnt/scripts/gob-demo/bin"
 readonly NODEDATA_FILE="/tmp/ioam-nodedata.txt"
 readonly SESSION="gobdemo"
 readonly MODE="${1:-tmux}"
-# The dashboard panes refresh when gob-ping, gob-metric set or gob-encap
-# signal them (tmux wait-for gob-refresh), and at the latest every REFRESH
-# seconds. On a slow machine, such as the browser VM of browser-vm/, set
-# GOB_DEMO_REFRESH higher.
+# One process, gob-dash-update, reads the maps and feeds the dashboard panes
+# through the FIFOs in DASH_DIR. It refreshes them when gob-ping, gob-metric
+# set, gob-encap or gob-refresh (also Ctrl-b R) ask, at each packet that
+# reaches n5, and at the latest every REFRESH seconds (0: only when asked).
+readonly DASH_DIR="/tmp/gob-dash"
 readonly REFRESH="${GOB_DEMO_REFRESH:-1}"
 
 if [[ ! -e "${BPF_OBJ}" ]]; then
@@ -76,7 +77,9 @@ cleanup() {
     done
     rm -f "${METRIC_PIN}" "${RECV_PIN}" 2>/dev/null || true
     pkill -f ioam-nodedata-collect 2>/dev/null || true
+    pkill -f gob-dash-update 2>/dev/null || true
     rm -f "${NODEDATA_FILE}" 2>/dev/null || true
+    rm -rf "${DASH_DIR}" 2>/dev/null || true
 }
 cleanup
 
@@ -230,16 +233,20 @@ fi
 #------------------------------------------------------------
 # 9. tmux dashboard: top row = 5 node metrics, bottom = received | control
 #------------------------------------------------------------
-# Background collector for the traditional IOAM node-data (not the GOB) seen
-# at n5. It keeps NODEDATA_FILE current, so the RECEIVED pane can show it
-# under the GOB table. The python helper uses a pty to keep ip ioam monitor
-# line buffered. It is killed by cleanup on the next run.
+# The traditional IOAM node-data (not the GOB) seen at n5 is decoded by
+# ioam-nodedata-collect into NODEDATA_FILE, shown under the GOB table.
 echo "node-data received at n5: (waiting for a ping)" > "${NODEDATA_FILE}"
-python3 "${BINDIR}/ioam-nodedata-collect" n5 "${NODEDATA_FILE}" >/dev/null 2>&1 &
+# The FIFOs of the dashboard: one per pane, and the trigger of the updater.
+mkdir -p "${DASH_DIR}"
+for f in trigger idle n1 n2 n3 n4 n5 recv; do
+    mkfifo "${DASH_DIR}/$f"
+done
 
 # Build with stable pane ids (%N) to avoid pane-index guessing.
 top=$(tmux new-session -d -s "${SESSION}" -x 210 -y 50 -P -F '#{pane_id}')
 tmux set -g mouse on
+# Ctrl-b R: refresh the data of all the panes (Ctrl-b r redraws the screen)
+tmux bind-key R run-shell "${BINDIR}/gob-refresh"
 # bottom band (fixed 20 lines): received (left) + control (right, wider)
 bot=$(tmux split-window -v -l 20 -P -F '#{pane_id}' -t "${top}")
 ctl=$(tmux split-window -h -p 45 -P -F '#{pane_id}' -t "${bot}")
@@ -249,25 +256,25 @@ n3=$(tmux split-window -h -p 75 -P -F '#{pane_id}' -t "${n2}")
 n4=$(tmux split-window -h -p 66 -P -F '#{pane_id}' -t "${n3}")
 n5=$(tmux split-window -h -p 50 -P -F '#{pane_id}' -t "${n4}")
 
-# top panes -> per-node metric watchers (each pane gets BINDIR on PATH first)
+# The metric panes and the RECEIVED pane run gob-pane, which prints what
+# gob-dash-update sends. The RECEIVED pane also starts the collector and the
+# updater: they belong to the pane and end with the tmux session.
 i=1
 for p in "${top}" "${n2}" "${n3}" "${n4}" "${n5}"; do
-    tmux send-keys -t "${p}" "export PATH=${BINDIR}:\$PATH" C-m
-    tmux send-keys -t "${p}" \
-        "while :; do clear; echo n${i}  metric X:; gob-metric get n${i}; timeout ${REFRESH} tmux wait-for gob-refresh; done" C-m
+    tmux respawn-pane -k -t "${p}" "${BINDIR}/gob-pane ${DASH_DIR}/n${i}"
     i=$((i + 1))
 done
-# bottom-left -> received view
-tmux send-keys -t "${bot}" "export PATH=${BINDIR}:\$PATH" C-m
-tmux send-keys -t "${bot}" \
-    "while :; do clear; gob-recv-show; echo; cat ${NODEDATA_FILE} 2>/dev/null; timeout ${REFRESH} tmux wait-for gob-refresh; done" C-m
+tmux respawn-pane -k -t "${bot}" \
+    "${BINDIR}/ioam-nodedata-collect n5 ${NODEDATA_FILE} ${DASH_DIR}/trigger & \
+     ${BINDIR}/gob-dash-update ${DASH_DIR} ${REFRESH} ${NODEDATA_FILE} & \
+     exec ${BINDIR}/gob-pane ${DASH_DIR}/recv"
 # bottom-right -> control shell + cheat-sheet
 tmux send-keys -t "${ctl}" "export PATH=${BINDIR}:\$PATH" C-m
 tmux send-keys -t "${ctl}" \
     "clear; echo 'CONTROL panel'; \
      echo 'type  gob-help  for the list of commands'; \
      echo; echo 'quick start:  gob-encap combined ; gob-ping'; \
-     echo 'screen garbled? Ctrl-b r redraws it'" C-m
+     echo 'Ctrl-b R refreshes the panes, Ctrl-b r redraws the screen'" C-m
 tmux select-pane -t "${ctl}"
 
 echo "tmux session '${SESSION}' ready. Attach with: tmux attach -t ${SESSION}"
