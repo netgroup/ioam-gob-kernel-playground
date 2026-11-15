@@ -54,6 +54,10 @@ if grep -qw gobtest=1 /proc/cmdline; then
 	fi
 fi
 
+# ?boot=1 raises the console loglevel to show the whole boot. Back to 4
+# for the session: kernel messages must not write over the shell or the
+# dashboard (they stay in dmesg).
+dmesg -n 4
 cat /etc/motd
 # The shell runs on a pty made by script, not on the serial console:
 # tmux does not draw when its client is attached to a serial port. script

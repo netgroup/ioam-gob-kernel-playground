@@ -264,7 +264,7 @@ URL parameters:
 | Parameter | Default | Meaning |
 |---|---|---|
 | `test=1` | off | run the self test at boot (see [Testing](#testing)) |
-| `boot=1` | off | print the kernel messages while it boots (`loglevel=7` instead of 4). The boot is slower: each line goes through the emulated serial port |
+| `boot=1` | off | print all the kernel messages while it boots (`loglevel=8` instead of 4), then back to 4 for the session. The boot is about 2 s slower: each line goes through the emulated serial port |
 | `mem=` | `512M` | guest memory, QEMU `-m` |
 | `tb=` | `500` | QEMU translation cache in MB (`-accel tcg,tb-size=`) |
 
