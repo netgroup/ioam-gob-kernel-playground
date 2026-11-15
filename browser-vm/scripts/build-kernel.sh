@@ -22,7 +22,13 @@ bad=0
 while IFS== read -r k v; do
 	case "$k" in CONFIG_*) ;; *) continue ;; esac
 	got=$(grep -E "^$k=|^# $k is not set" $O/.config)
-	[ "$v" = n ] && want="# $k is not set" || want="$k=$v"
+	if [ "$v" = n ]; then
+		# off: "is not set", or absent because a dependency is off
+		case "$got" in "# $k is not set"|"") continue ;; esac
+		want="# $k is not set"
+	else
+		want="$k=$v"
+	fi
 	[ "$got" = "$want" ] || { echo "CONFIG MISMATCH: want '$want' got '$got'"; bad=1; }
 done < $FRAG
 [ $bad = 0 ] || die "config mismatch"

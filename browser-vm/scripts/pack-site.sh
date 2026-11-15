@@ -18,20 +18,32 @@ rm -rf $T && find $SITE -mindepth 1 -delete && mkdir -p $T/pack $SITE/data $SITE
 cp /work/build/kernel/arch/x86/boot/bzImage /work/build/guest/disk.ext4 $Q/*.bin $T/pack/ ||
 	die "missing input: run the kernel, qemu and guest steps first"
 
-cd $T || die "no $T"
-/emsdk/upstream/emscripten/tools/file_packager.py qemu-system-x86_64.data \
-	--preload $T/pack@/pack > $SITE/load.js 2> file_packager.log || { cat file_packager.log; die "file_packager failed"; }
-SIZE=$(stat -c %s qemu-system-x86_64.data)
-gzip -9 -n -c qemu-system-x86_64.data > qemu.data.gz || die "gzip failed"
-GZ=$(stat -c %s qemu.data.gz)
-split -b "$PART_SIZE" -d -a 3 qemu.data.gz $SITE/data/qemu.data.gz. || die "split failed"
-python3 - "$SIZE" "$GZ" $SITE/data <<'PY' || die "manifest failed"
+# The compressed package is cached in $C with the sha256 of its inputs:
+# when kernel, disk and BIOS did not change (a change to the page only),
+# the parts are reused and gzip -9, the slow part, is skipped.
+C=/work/build/pack-cache
+H=$(cd $T/pack && sha256sum * | sha256sum | cut -d' ' -f1)
+if [ -f $C/inputs.sha256 ] && [ "$(cat $C/inputs.sha256)" = "$H" ]; then
+	cp $C/load.js $SITE/ && cp $C/data/* $SITE/data/ || die "cannot copy the cached package"
+	echo "package unchanged (inputs sha256 $H), reused"
+else
+	cd $T || die "no $T"
+	/emsdk/upstream/emscripten/tools/file_packager.py qemu-system-x86_64.data \
+		--preload $T/pack@/pack > $SITE/load.js 2> file_packager.log || { cat file_packager.log; die "file_packager failed"; }
+	SIZE=$(stat -c %s qemu-system-x86_64.data)
+	gzip -9 -n -c qemu-system-x86_64.data > qemu.data.gz || die "gzip failed"
+	GZ=$(stat -c %s qemu.data.gz)
+	split -b "$PART_SIZE" -d -a 3 qemu.data.gz $SITE/data/qemu.data.gz. || die "split failed"
+	python3 - "$SIZE" "$GZ" $SITE/data <<'PY2' || die "manifest failed"
 import json, os, sys
 size, gz, d = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3]
 parts = sorted(f for f in os.listdir(d) if f.startswith('qemu.data.gz.'))
 json.dump({'size': size, 'gz_size': gz, 'parts': parts}, open(os.path.join(d, 'manifest.json'), 'w'))
 print('package %d bytes, gzip %d bytes, %d parts' % (size, gz, len(parts)))
-PY
+PY2
+	rm -rf $C && mkdir -p $C/data && cp $SITE/load.js $C/ && cp $SITE/data/* $C/data/ &&
+		echo "$H" > $C/inputs.sha256 || die "cannot fill the package cache"
+fi
 
 cp $Q/qemu-system-x86_64 $SITE/out.js || die "copy failed"
 cp $Q/qemu-system-x86_64.wasm $Q/qemu-system-x86_64.worker.js $SITE/ || die "copy failed"

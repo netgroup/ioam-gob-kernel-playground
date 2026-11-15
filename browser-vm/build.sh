@@ -13,7 +13,9 @@
 #   qemu     qemu-system-x86_64 compiled to WebAssembly
 #   guest    guest disk image (ext4)
 #   pack     web site in $WORK/site
-#   test     self test in headless Chromium
+#   test     self test in headless Chromium (about 6 minutes)
+#   test-quick  boot and a few commands in headless Chromium (about 1 minute,
+#            for changes to the page; not part of all, not enough to publish)
 #   all      every step above, in this order
 #   serve    serve $WORK/site on http://127.0.0.1:$PORT (not part of all)
 #   clean    remove $WORK, podman storage included (not part of all)
@@ -223,6 +225,16 @@ do_publish() {
 	echo "    Pages, Deploy from a branch, gh-pages, / (root)."
 }
 
+do_test_quick() {
+	step "quick test (headless Chromium)"
+	CMD=(bash -c "pip install -q --no-deps --break-system-packages $PLAYWRIGHT_PIP >/dev/null 2>&1 &&
+		python3 /bvm/test/quick_test.py")
+	run_in $PLAYWRIGHT_IMAGE "$MEM_TEST" --shm-size=2g > "$WORK/logs/test-quick.stdout" 2>&1
+	local rc=$?
+	grep -E '^\[.{8}\] (OK  |FAIL|shell prompt|python3 -c pass|BROWSER_VM_QUICK_TEST)' "$WORK/logs/test-quick.stdout"
+	[ $rc = 0 ] || die "quick test failed, see $WORK/logs/test-quick.log"
+}
+
 do_serve() {
 	[ -f "$WORK/site/index.html" ] || die "no site: run the pack step first"
 	echo "Serving $WORK/site on http://127.0.0.1:$PORT/ (Ctrl-C to stop)"
@@ -236,6 +248,7 @@ for s in "$@"; do
 	all) do_images && do_sources && do_kernel && do_clang && do_qemu &&
 		do_guest && do_pack && do_test || exit 1 ;;
 	images|sources|kernel|clang|qemu|guest|pack|test|serve|clean|publish) "do_$s" || exit 1 ;;
+	test-quick) do_test_quick || exit 1 ;;
 	*) die "unknown step '$s'" ;;
 	esac
 done

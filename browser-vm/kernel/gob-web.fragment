@@ -43,3 +43,19 @@ CONFIG_IKCONFIG_PROC=y
 CONFIG_MODULES=n
 CONFIG_RANDOMIZE_BASE=n
 CONFIG_ACPI=n
+
+# Performance under emulation. Every guest instruction is emulated in
+# the browser, so anything the kernel adds to each syscall, function or
+# timer tick is paid many times. The VM runs alone in a browser tab, so
+# the CPU vulnerability mitigations protect nothing there.
+CONFIG_CPU_MITIGATIONS=n
+CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE=y
+CONFIG_NO_HZ_IDLE=y
+CONFIG_PREEMPT_DYNAMIC=n
+CONFIG_DEBUG_PREEMPT=n
+CONFIG_SLUB_DEBUG=n
+CONFIG_STACKPROTECTOR=n
+
+# The demo uses no SIT tunnel, and SIT adds a sit0 device to every
+# network namespace.
+CONFIG_IPV6_SIT=n

@@ -55,6 +55,9 @@ if grep -qw gobtest=1 /proc/cmdline; then
 fi
 
 cat /etc/motd
+# The shell runs on a pty made by script, not on the serial console:
+# tmux does not draw when its client is attached to a serial port. script
+# copies the console size (set above) to the pty.
 while true; do
-	setsid -c /bin/bash -l </dev/ttyS0 >/dev/ttyS0 2>&1
+	setsid -c script -q -c "/bin/bash -l" /dev/null </dev/ttyS0 >/dev/ttyS0 2>&1
 done

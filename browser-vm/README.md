@@ -95,19 +95,22 @@ Local changes that are not committed are not used.
 | `clang` | static clang 19.1.7 with only the BPF backend (the long step) | `out/build/clang-bpf/out/` |
 | `qemu` | `qemu-system-x86_64` compiled to WebAssembly | `out/build/qemu/` |
 | `guest` | guest disk image, ext4 | `out/build/guest/disk.ext4` |
-| `pack` | the web site | `out/site/` |
-| `test` | self test in headless Chromium | `out/logs/test*` |
+| `pack` | the web site. The compressed disk is cached by the sha256 of kernel, disk and BIOS, so a change to the page only takes seconds | `out/site/` |
+| `test` | self test in headless Chromium, about 6 minutes | `out/logs/test*` |
+| `test-quick` | boot and a few commands in headless Chromium, about 1 minute. For changes to the page, not enough to publish | `out/logs/test-quick.log` |
 | `all` | every step above, in this order | |
 | `serve` | serves `out/site/` on `http://127.0.0.1:8000/` | |
 | `clean` | removes `out/`, podman storage included | |
 | `publish` | pushes `out/site/` to the `gh-pages` branch of `PAGES_REPO` | |
 
 Each step logs to `out/logs/<step>.log` and prints a short summary. A step
-can be run again on its own, for example after a change to the guest:
+can be run again on its own. Which steps a change needs:
 
-```bash
-./build.sh guest pack test
-```
+| Changed | Run |
+|---|---|
+| `web/` (the page) | `./build.sh pack test-quick`, then `test` before publishing |
+| `guest/` (gob-init, motd, packages) or the demo in the playground | `./build.sh sources guest pack test` |
+| `kernel/gob-web.fragment` or the kernel submodule | `./build.sh sources kernel guest pack test` |
 
 Every step runs in a container:
 
@@ -202,10 +205,11 @@ projects about GOB.
 Run the 5-node demo:
 
 ```bash
-bash /mnt/scripts/gob-demo/gob-demo-5node-recv-auto.sh
+gob-demo-5node-recv-auto.sh
 ```
 
-It builds 7 network namespaces in a line (h1, n1 to n5, h2), loads the
+The demo scripts and their `gob-*` helpers are in the `PATH` of the shell
+(`/etc/profile.d/gob-demo.sh`). It builds 7 network namespaces in a line (h1, n1 to n5, h2), loads the
 GOB program with `ip ioam gobschema add` on every node, sends a ping from
 h1 to h2 through the IOAM encapsulation, and checks what every node
 received. It ends with `GOB_DEMO_5NODE_RECV=PASS`.
@@ -214,7 +218,7 @@ Or play with it step by step. Set the topology up, then use the `gob-*`
 commands (`gob-help` lists them):
 
 ```bash
-bash /mnt/scripts/gob-demo/gob-demo-5node-recv-tmux.sh setup-only
+gob-demo-5node-recv-tmux.sh setup-only
 gob-encap combined ; gob-ping ; gob-recv-show
 gob-metric set n3 70 ; gob-ping ; gob-recv-show
 ```
@@ -225,14 +229,15 @@ the nodes after n3 see the new value: node 4 gets max 70 and sum 100,
 node 5 gets max 70 and sum 140. `gob-encap gob`, `trad` and `off` switch
 the encapsulation of n1 between GOB only, node data only and no IOAM.
 
-The same script without `setup-only` opens a tmux dashboard. That does
-not work in the browser VM yet (see [Known limitations](#known-limitations)).
+The same script without `setup-only` prepares a tmux dashboard: run it,
+then `tmux attach -t gobdemo` (detach with `Ctrl-b d`). It draws in the
+browser VM, but it is slow there (see [Known limitations](#known-limitations)).
 
 Build the eBPF program yourself, then run the demo again with your build:
 
 ```bash
 cd /opt/gob/src && make
-bash /mnt/scripts/gob-demo/gob-demo-5node-recv-auto.sh
+gob-demo-5node-recv-auto.sh
 ```
 
 `make` writes `/mnt/shared/ioam6_gob_recv.bpf.o`, the object the demo
@@ -274,7 +279,15 @@ The test passes when all of these hold:
 - after `gob-metric set n3 70`, node 5 received min 10, max 70, sum 140,
   count 4.
 
-The result is the last line of `out/logs/test.log`,
+`./build.sh test-quick` only opens the page, waits for the shell and runs
+`uname -r`, `ip -V`, `bpftool version`, `clang --version` and `stty size`.
+It also checks that the demo scripts and the `gob-*` helpers are in the
+`PATH` of the shell, that tmux draws (`tmux attach` to a session running
+`top`) and detaches, and it logs how long `python3 -c pass` takes.
+It takes about a minute, and is meant for changes to the page. Run the
+full `test` before publishing.
+
+The result of the full test is the last line of `out/logs/test.log`,
 `BROWSER_VM_TEST=PASS` or `BROWSER_VM_TEST=FAIL`. The whole terminal is in
 `out/logs/test-chromium.screen`, the timeline in
 `out/logs/test-chromium.log`.
@@ -323,9 +336,8 @@ The page works from a subdirectory: all its paths are relative.
 GitHub limits a published Pages site to 1 GB and sets a soft bandwidth
 limit of 100 GB per month. A visit downloads about 107 MB the first time.
 
-`publish` was tested against a local repository. GitHub Pages itself has
-not been tested yet: the tests so far served the site with a local static
-server.
+`publish` was tested against a local repository, and the published site
+passed the full self test in headless Chromium, loaded from GitHub Pages.
 
 ## Measurements
 
@@ -339,7 +351,7 @@ Site:
 
 | File | Size |
 |---|---|
-| guest package (kernel, disk, BIOS), gzip, 2 parts | 94,917,070 bytes |
+| guest package (kernel, disk, BIOS), gzip, 2 parts | 94,677,482 bytes |
 | `qemu-system-x86_64.wasm` | 11,703,534 bytes |
 | whole site | about 107 MB |
 
@@ -348,15 +360,25 @@ Self test, seconds from opening the page:
 | Event | Time |
 |---|---|
 | cross-origin isolated (download starts) | 6 s |
-| shell ready, self test starts | 26 s |
-| first demo PASS | 106 s |
-| clang build in the VM | 93 s, done at 212 s |
-| second demo (object built in the VM) done | 262 s |
-| interactive demo done, end of the test | 322 s |
+| shell ready, self test starts | 21 s |
+| first demo PASS | 81 s |
+| clang build in the VM | 81 s, done at 166 s |
+| second demo (object built in the VM) done | 211 s |
+| interactive demo done, end of the test | 256 s |
 
-Across the runs of these two days, the clang build in the VM took
-between 65 and 96 seconds, and the first demo ended between 86 and 107
-seconds after opening the page.
+The same test before the performance section of the kernel config (see
+[Design notes](#design-notes)): shell at 26 s, first demo at 106 s,
+clang 93 s, end at 322 s.
+
+Cost of a command in the VM, three runs in a row, after the boot:
+
+| Command | Runs |
+|---|---|
+| `python3 -c pass` | 4.7 s, 1.6 s, 1.6 s (about 19 s for the very first run after the boot) |
+| `gob-metric get n1` (bash, plus Python for the JSON) | 21.7 s, 16.5 s, 6.0 s |
+| `gob-recv-show` (bash, plus Python for the JSON) | 6.1 s, 6.1 s, 6.0 s |
+| `bpftool map dump` of `gob_recv` | 0.5 s, 0.5 s, 0.5 s |
+| `bash -c true` | 0.2 s |
 
 `./build.sh all` from an empty `out/`: 46 minutes (the clang step alone
 about 17). Disk used by `out/` afterwards: 16 GB, podman storage
@@ -364,8 +386,9 @@ included.
 
 ## Known limitations
 
-- **Tested only in headless Chromium**, on Linux, served locally. Not yet
-  on GitHub Pages, and not yet by hand in a desktop browser.
+- **Tested in headless Chromium** on Linux, served locally and from
+  GitHub Pages. By hand only on one old desktop with a 2013 CPU, where it
+  works but is much slower.
 - **Firefox:** with an earlier, bigger version of the disk (785 MB instead
   of 310 MB, and the Debian clang), headless Firefox passed the demo but
   the page ran out of memory during the clang build. The current version
@@ -375,12 +398,12 @@ included.
 - **No network** to the outside: QEMU runs with `-nic none`.
 - **No persistence:** the disk lives in memory, reloading the page resets
   it.
-- **The tmux dashboard does not show up.** `gob-demo-5node-recv-tmux.sh`
-  without arguments sets the topology up and creates the tmux session, but
-  after `tmux attach` the terminal of the page does not change. tmux runs
-  (`Ctrl-b d` detaches it), so its output is lost somewhere between the
-  serial console and xterm.js. The cause is not known yet. Use
-  `setup-only` and the `gob-*` commands instead.
+- **The tmux dashboard is slow.** It draws, but its six panels run
+  `gob-metric get` and `gob-recv-show` every second (`watch -n1`), and in
+  the VM each run takes about 6 s, nearly all of it to start Python and
+  its json module (`bpftool` itself takes about 0.5 s, see
+  [Measurements](#measurements)). The panels hardly update and the VM
+  stays busy. Use `setup-only` and the `gob-*` commands instead.
 - The QEMU WebAssembly JIT of qemu-wasm is experimental upstream.
 
 ## Design notes
@@ -405,6 +428,17 @@ build host.
   and more CPUs made the emulation slower. Without ACPI the boot is about
   10 s shorter.
 - **QEMU without `-g`.** The `.wasm` goes from about 41 MB to about 12 MB.
+- **A kernel config for speed under emulation.** CPU vulnerability
+  mitigations off (the VM is alone in a browser tab), `-O2` instead of the
+  `-Os` of the qemu-wasm example, no timer tick when idle (`NO_HZ_IDLE`),
+  no `PREEMPT_DYNAMIC`, no `DEBUG_PREEMPT`, `SLUB_DEBUG` or stack
+  protector, and no SIT (it adds a `sit0` device to every network
+  namespace, and the demo does not use it). The self test went from 322 s
+  to 256 s. Starting Python did not get faster.
+- **The shell runs on a pty.** tmux does not draw when its client is
+  attached to a serial port. `gob-init` starts the shell with
+  `script -q -c "/bin/bash -l" /dev/null` on the serial console, so the
+  shell and everything started from it use a pty.
 - **The terminal size goes on the kernel command line.** A serial console
   does not carry a window size, so `stty size` says `0 0` and long lines
   wrap badly. The page fits the terminal to the window, passes
