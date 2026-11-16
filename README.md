@@ -1,6 +1,6 @@
 # IOAM-GOB Kernel Playground
 
-This repository provides a complete development environment for experimenting with the **Global Opaque Block (GOB)** extension for **IOAM6** (In-Band Operational, Administration, and Maintenance over IPv6). GOB enables programmable in-band network telemetry through user-defined metadata processing via eBPF programs.
+This repository provides a complete development environment for experimenting with the **Global Opaque Block (GOB)** extension for **IOAM6** (In-Band Operational, Administration, and Maintenance over IPv6). The GOB is one global metadata region carried at the tail of the IOAM Pre-allocated Trace Option. GOB-aware nodes process it at every hop with user-defined eBPF programs, and nodes that implement plain RFC 9197 are not affected.
 
 ## Clone the Repository
 
@@ -21,17 +21,40 @@ cd ioam-gob-kernel-playground
 
 ### What is GOB?
 
-GOB (Global Opaque Block) is a proposed IOAM6 extension that enables programmable metadata processing using eBPF programs.
+The Global Opaque Block (GOB) is an extension of the IOAM Pre-allocated Trace Option (PTO) of [RFC 9197](https://www.rfc-editor.org/rfc/rfc9197). It adds one global metadata region at the tail of the option, after the pre-allocated node data space.
 
-**Note:** GOB is currently a research extension, not an IETF standard yet. Complete specifications are available in the project repository.
+- **Path-level metadata.** Node data in the PTO is per node. The GOB carries what belongs to the packet, the flow or the path as a whole, for example an aggregate that every node updates in flight (minimum, maximum, sum and count of a per-node metric).
+- **Transparent to legacy nodes.** RFC 9197 nodes fill the node data space from its tail toward its head, at offsets derived from RemainingLen, and never reach the GOB. They need no change: only the nodes that read or update the GOB are GOB-aware.
+- **Programmable.** A GOB-aware node runs an eBPF program on the GOB payload at every hop. A new use case is a schema plus an eBPF program, with no kernel change.
+
+The GOB is specified in the Internet-Draft [draft-mayer-bpm-ioam-gob](https://datatracker.ietf.org/doc/draft-mayer-bpm-ioam-gob/), an individual submission to the IETF BPM working group. It is not an IETF standard.
+
+### GOB Modes
+
+An IOAM namespace handles the GOB in one of two modes:
+
+| | Default mode | Namespace-implied mode |
+|---|---|---|
+| **Presence of the GOB** | Per packet, signaled by the G bit in the trace header | Every packet of the namespace |
+| **Size and schema** | Carried in the GOB trailer, the last 4 octets of the option | Configured on the namespace: no trailer in the packet |
+| **G bit** | Set | Not used: the Reserved octet stays at zero |
+| **On the wire** | PTO with the G bit set and a GOB trailer | A plain RFC 9197 PTO |
+| **Namespace** | `gobschema ID` | `gobschema { ID \| none } gobimplied SIZE` |
+| **Encapsulation route** | `gobsize SIZE` | `gobimplied SIZE` |
+
+The namespace-implied mode removes the 4-octet trailer from every packet and, depending on alignment, some padding of the Hop-by-Hop Options header. Commands for both modes are in [GOB Modes: Commands](#gob-modes-commands-inside-guest-vm).
 
 ### Technical Details
 
 | Parameter | Specification |
 |-----------|---------------|
-| **GOB Len** | 8-bit field: count of 4-octet payload units. Total size = 4 + (4 × GOB_Len) bytes |
+| **Position** | Tail of the IOAM Pre-allocated Trace Option, after the node data space |
+| **GOB Trailer** | Default mode only. Last 4 octets of the option: GOB Len (8 bits) and Schema (24 bits) |
+| **GOB Len** | 8-bit field: count of 4-octet payload units. Total size = 4 + (4 × GOB_Len) bytes in the default mode. In the namespace-implied mode the GOB is payload only, of the size configured on the namespace |
 | **Schema** | 24-bit identifier for metadata format definition |
+| **Payload size** | Non-zero multiple of 4 octets, at most 240 |
 | **eBPF Type** | `BPF_PROG_TYPE_IOAM6_GOB` |
+| **eBPF Context** | `struct bpf_ioam6_trace_gob_ctx`: `len` (payload length), `schema`, `data` / `data_end` (the GOB payload), `skb` |
 | **Dedicated Helpers** | `bpf_ioam6_trace_gob_load_bytes()`, `bpf_ioam6_trace_gob_store_bytes()` |
 | **Kernel Config** | `CONFIG_IPV6_IOAM6_GOB=y` |
 
@@ -63,7 +86,7 @@ The system consists of three main components:
 ioam-gob-kernel-playground/
 ├── README.md                       # Project overview
 ├── AGENTS.md                       # Development guidelines
-├── LICENSE                         # MIT License
+├── LICENSE                         # BSD 3-Clause License
 ├── podman/                         # Container environment setup
 │   ├── Dockerfile                  # Defines container dependencies
 │   ├── container-build.sh          # Builds Podman image
@@ -75,6 +98,8 @@ ioam-gob-kernel-playground/
 │   └── linux/ [submodule]          # Linux kernel source with IOAM6/GOB support
 ├── src/c/                          # GOB-specific eBPF code
 │   ├── netprog.bpf.c               # Primary GOB eBPF program
+│   ├── ioam6_gob_recv.bpf.c        # Five-node aggregation demo (min, max, sum, count)
+│   ├── ioam6_gob_acc4.bpf.c        # 4-octet accumulator example
 │   ├── common.h                    # BPF helper definitions
 │   └── Makefile                    # eBPF compilation rules
 ├── iproute2/ [submodule]           # IP tool extensions for GOB
@@ -82,7 +107,9 @@ ioam-gob-kernel-playground/
 ├── bpftool/ [submodule]            # BPF tools (dependency)
 ├── tests/                           # Test scripts and VM setup
 │   ├── scripts/                    # Test scripts
-│   │   └── ioam6-testbed.sh        # IOAM6/GOB network topology tests (routing/XDP tests removed)
+│   │   ├── ioam6-testbed.sh        # IOAM6/GOB network topology tests (routing/XDP tests removed)
+│   │   ├── gob-demo/               # Five-node in-flight aggregation demo
+│   │   └── retrocompat/            # Backward-compatibility bench (GOB-aware and stock-kernel nodes)
 │   └── vm/ [submodule]             # VM setup and QEMU (submodule)
 │       ├── run.sh                  # Start QEMU VM
 │       ├── enter.sh                # Connect via SSH to VM at localhost:10022
@@ -97,7 +124,7 @@ The project uses Git submodules for kernel/linux, iproute2, libbpf, bpftool, and
 | Submodule | Purpose |
 |-----|-------|
 | `kernel/linux` | Linux kernel source with IOAM6/GOB support |
-| `iproute2` | iproute2 with GOB extension for `ip ioam gobschema` commands |
+| `iproute2` | iproute2 with GOB support: `ip ioam gobschema`, `ip ioam namespace set ... gobimplied`, and the `gobsize` / `gobimplied` route options |
 | `libbpf` | libbpf library for BPF compilation |
 | `bpftool` | bpftool for BPF skeleton generation |
 | `tests/vm` | VM setup scripts and QEMU configuration |
@@ -107,6 +134,8 @@ To update submodules:
 ```bash
 git submodule update --init --recursive
 ```
+
+The `kernel/linux` and `iproute2` submodules point to the `ioam6-gob_v4` branches of [netgroup/linux-kernel-dev](https://github.com/netgroup/linux-kernel-dev) and [netgroup/linux-iproute2-dev](https://github.com/netgroup/linux-iproute2-dev), which implement both GOB modes.
 
 ## Build Commands
 
@@ -251,6 +280,41 @@ ip ioam namespace set 123 gobschema 77
 ip ioam gobschema show
 ```
 
+### GOB Modes: Commands (Inside Guest VM)
+
+A GOB schema binds a numerical ID to an eBPF program. The same schema can be linked to an IOAM namespace in either mode (see [GOB Modes](#gob-modes)).
+
+**Default mode** (G bit and GOB trailer):
+
+```bash
+ip ioam gobschema add 170 object gob.bpf.o section ioam6_gob
+ip ioam namespace set 1 gobschema 170
+
+# Encapsulating node: 16-octet GOB payload followed by the 4-octet trailer
+ip -6 route add 2001:db8:1::/64 encap ioam6 mode encap tundst 2001:db8:42::1 \
+    trace prealloc type 0x800000 ns 1 size 12 gobsize 16 dev eth0
+```
+
+**Namespace-implied mode** (no trailer, G bit not used):
+
+```bash
+ip ioam namespace set 1 gobschema 170 gobimplied 16
+
+# A node that must know the GOB size but runs no program on it
+ip ioam namespace set 1 gobschema none gobimplied 16
+
+# Encapsulating node: 16-octet GOB, payload only
+ip -6 route add 2001:db8:1::/64 encap ioam6 mode encap tundst 2001:db8:42::1 \
+    trace prealloc type 0x800000 ns 1 size 12 gobimplied 16 dev eth0
+```
+
+The GOB schema and the implied size are always set together: a `namespace set ... gobschema` command without `gobimplied` puts the namespace back in the default mode. In the namespace-implied mode every packet of the namespace carries the GOB, and all GOB-aware nodes of the domain must be configured with the same size. The full syntax is in the `ip-ioam(8)` and `ip-route(8)` man pages of the iproute2 submodule.
+
+### GOB Demos and Test Benches
+
+- [tests/scripts/gob-demo/](tests/scripts/gob-demo/): five-node demo of in-flight aggregation. Each node folds its own metric into the minimum, maximum, sum and count carried in the GOB (eBPF program `src/c/ioam6_gob_recv.bpf.c`). Shown at the IETF 126 Hackathon.
+- [tests/scripts/retrocompat/rc-node-v4.sh](tests/scripts/retrocompat/rc-node-v4.sh): backward-compatibility bench, one node per guest. The path goes through a node running a stock kernel, with no GOB patches, or through a GOB-aware node as a control. In both GOB modes the stock node records its node data and leaves the GOB untouched. Two GOB layouts are covered: 16 octets (`ioam6_gob_recv.bpf.c`) and a 4-octet running sum (`src/c/ioam6_gob_acc4.bpf.c`). Topology, commands and expected results are in the header of the script. Used at the IETF 127 Hackathon.
+
 ## License
 
 This project is licensed under the **BSD 3-Clause License** - see the [LICENSE](LICENSE) file for details.
@@ -274,9 +338,11 @@ While the source code specific to this repository is provided under the permissi
 
 ## References
 
-1. **Research Paper**: Available upon publication
-2. **Linux Kernel IOAM6 Documentation**: Documentation/networking/ioam6.txt
-3. **eBPF Documentation**: https://ebpf.io
+1. **Internet-Draft**: [draft-mayer-bpm-ioam-gob](https://datatracker.ietf.org/doc/draft-mayer-bpm-ioam-gob/), "Global Opaque Block for IOAM Pre-allocated Trace Option"
+2. **Research Paper**: A. Mayer, S. Salsano, G. Sidoretti, P. Loreti, L. Bracciale, H. ElBakoury, D. R. Lopez, "Integrating the Global Opaque Block into the IOAM Framework: A Unified Approach to In-Packet Telemetry and Metadata", IEEE/IFIP NOMS 2026. The paper describes an earlier design, with the GOB at the head of the option
+3. **RFC 9197**: [Data Fields for In Situ Operations, Administration, and Maintenance (IOAM)](https://www.rfc-editor.org/rfc/rfc9197)
+4. **Linux Kernel IOAM6 Documentation**: Documentation/networking/ioam6.txt
+5. **eBPF Documentation**: https://ebpf.io
 
 ## Troubleshooting
 
