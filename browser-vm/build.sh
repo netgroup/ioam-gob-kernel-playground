@@ -214,13 +214,17 @@ do_publish() {
 	local d=$WORK/publish
 	[ -f "$WORK/site/index.html" ] || die "no site: run the pack step first"
 	step "publish $WORK/site to $PAGES_REPO (branch gh-pages)"
-	# A new one-commit branch each time: the site repository does not grow.
-	rm -rf "$d" && mkdir -p "$d" && cp -a "$WORK/site/." "$d/" || die "cannot copy the site"
 	# Commit as the playground repository does (its user.name and
-	# user.email), not with the global git identity.
+	# user.email), not with the global git identity. Outside a git
+	# repository, git config would fall back to the global one: refuse.
+	git -C "$REPO" rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
+		die "REPO=$REPO is not a git repository: set REPO to the playground"
 	local name email
 	name=$(git -C "$REPO" config user.name) && email=$(git -C "$REPO" config user.email) ||
 		die "git user.name and user.email are not set for $REPO"
+	echo "    committing as $name <$email> (from $REPO)"
+	# A new one-commit branch each time: the site repository does not grow.
+	rm -rf "$d" && mkdir -p "$d" && cp -a "$WORK/site/." "$d/" || die "cannot copy the site"
 	git -C "$d" init -q -b gh-pages &&
 	git -C "$d" config user.name "$name" && git -C "$d" config user.email "$email" &&
 	git -C "$d" add -A &&
