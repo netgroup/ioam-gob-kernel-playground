@@ -18,7 +18,7 @@ cd ioam-gob-kernel-playground
 - **KVM support** enabled in the host kernel for QEMU virtualization
 - **CPU virtualization** (VT-x/AMD-V) enabled in system BIOS settings
 - **Root user** (or sudo access) for container operations
-- **A Linux bridge named `br0`** on the host: `podman/run-detach.sh` connects the container to it (see [Getting Started](#getting-started))
+- **A Linux bridge on the host** (default name `br0`), only if bridged guests must reach your LAN: `podman/run-detach.sh` attaches the container to it (see [Getting Started](#getting-started))
 
 ## Overview
 
@@ -184,16 +184,9 @@ cd /opt/kernel-playground
 
 All subsequent builds (kernel, eBPF programs, Guest VM) occur under `/opt/kernel-playground` within the container.
 
-`run-detach.sh` starts the container and links it to the host with a veth pair. The host end is attached to a bridge named `br0` (the name is fixed in the script, variable `UPLINK_BR`); the other end goes to `br-gob`, a bridge created inside the container, where bridged guests are plugged. The script needs `br0` to exist on the host: without it, it stops with an error after the container has been started, and `br-gob` is not created.
+`run-detach.sh` starts the container and links it to the host with a veth pair. The host end is attached to the bridge `br0` (another name can be given with `UPLINK_BR=name ./run-detach.sh`); the other end goes to `br-gob`, a bridge created inside the container, where bridged guests are plugged.
 
-If the host has no `br0` and you only want the single guest of the steps below, an isolated bridge is enough:
-
-```bash
-ip link add br0 type bridge
-ip link set br0 up
-```
-
-Bridged guests reach your LAN only if `br0` is connected to it.
+If the host has no such bridge, the script prints a warning and goes on without the uplink: `br-gob` is still created, guests started with `run.sh -u` are not affected, and bridged guests reach each other but not your LAN.
 
 ### Build eBPF Programs (Inside Container)
 
