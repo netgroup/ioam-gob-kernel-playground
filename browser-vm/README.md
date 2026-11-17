@@ -595,7 +595,8 @@ browser-vm/
 │   └── motd                     shown at boot
 ├── web/
 │   ├── index.html               the page
-│   └── module.js                QEMU arguments
+│   ├── module.js                QEMU arguments
+│   └── README.md                README of the published site (gh-pages)
 └── test/
     ├── run_test.py              full headless browser test
     └── quick_test.py            one-minute headless browser test

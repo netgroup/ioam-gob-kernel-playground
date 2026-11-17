@@ -47,7 +47,7 @@ fi
 
 cp $Q/qemu-system-x86_64 $SITE/out.js || die "copy failed"
 cp $Q/qemu-system-x86_64.wasm $Q/qemu-system-x86_64.worker.js $SITE/ || die "copy failed"
-cp /bvm/web/index.html /bvm/web/module.js $SITE/ || die "copy of the page failed"
+cp /bvm/web/index.html /bvm/web/module.js /bvm/web/README.md $SITE/ || die "copy of the page failed"
 
 # Third-party browser code, at fixed versions.
 mkdir -p $T/npm && cd $T/npm || die "no npm dir"
