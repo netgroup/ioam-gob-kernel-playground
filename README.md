@@ -2,6 +2,8 @@
 
 This repository provides a complete development environment for experimenting with the **Global Opaque Block (GOB)** extension for **IOAM6** (In-Band Operational, Administration, and Maintenance over IPv6). The GOB is one global metadata region carried at the tail of the IOAM Pre-allocated Trace Option. GOB-aware nodes process it at every hop with user-defined eBPF programs, and nodes that implement plain RFC 9197 are not affected.
 
+**Quick look, nothing to build:** [IOAM GOB v3 in your browser](https://netgroup.github.io/gob-browser-vm/) runs a VM with the GOB v3 kernel in the browser. It is the v3 kernel, so the default mode only (see [GOB Modes](#gob-modes)). Its sources are in [`browser-vm/`](https://github.com/netgroup/ioam-gob-kernel-playground/tree/ioam6_gob_v3-dev/browser-vm) on the `ioam6_gob_v3-dev` branch.
+
 ## Clone the Repository
 
 ```bash
@@ -16,6 +18,7 @@ cd ioam-gob-kernel-playground
 - **KVM support** enabled in the host kernel for QEMU virtualization
 - **CPU virtualization** (VT-x/AMD-V) enabled in system BIOS settings
 - **Root user** (or sudo access) for container operations
+- **A Linux bridge named `br0`** on the host: `podman/run-detach.sh` connects the container to it (see [Getting Started](#getting-started))
 
 ## Overview
 
@@ -111,8 +114,8 @@ ioam-gob-kernel-playground/
 │   │   ├── gob-demo/               # Five-node in-flight aggregation demo
 │   │   └── retrocompat/            # Backward-compatibility bench (GOB-aware and stock-kernel nodes)
 │   └── vm/ [submodule]             # VM setup and QEMU (submodule)
-│       ├── run.sh                  # Start QEMU VM
-│       ├── enter.sh                # Connect via SSH to VM at localhost:10022
+│       ├── run.sh                  # Start QEMU VM (bridged by default, -u for user-mode networking)
+│       ├── enter.sh                # Connect via SSH to a VM started with -u (localhost:10022)
 │       └── shared/                 # 9p shared directory for VM eBPF binaries
 ├── vmlinux/                        # vmlinux.h for BPF compilation (dependency, not a submodule)
 ```
@@ -181,6 +184,17 @@ cd /opt/kernel-playground
 
 All subsequent builds (kernel, eBPF programs, Guest VM) occur under `/opt/kernel-playground` within the container.
 
+`run-detach.sh` starts the container and links it to the host with a veth pair. The host end is attached to a bridge named `br0` (the name is fixed in the script, variable `UPLINK_BR`); the other end goes to `br-gob`, a bridge created inside the container, where bridged guests are plugged. The script needs `br0` to exist on the host: without it, it stops with an error after the container has been started, and `br-gob` is not created.
+
+If the host has no `br0` and you only want the single guest of the steps below, an isolated bridge is enough:
+
+```bash
+ip link add br0 type bridge
+ip link set br0 up
+```
+
+Bridged guests reach your LAN only if `br0` is connected to it.
+
 ### Build eBPF Programs (Inside Container)
 
 ```bash
@@ -194,15 +208,21 @@ make && make install    # Build and install eBPF programs
 
 ```bash
 cd tests/vm
-./run.sh                # Start the VM (QEMU runs directly from the container)
+./run.sh -u             # Start the VM with user-mode networking (QEMU runs directly from the container)
 ```
+
+With `-u` the guest uses QEMU user-mode networking and its SSH port is forwarded to `localhost:10022` in the container, which is where `enter.sh` connects.
+
+Without `-u`, `run.sh` starts a bridged guest: named `gob0`, attached with a tap device to `br-gob`, and it fails if `br-gob` does not exist. The options `-n`, `-M`, `-a`, `-g` and `-b` set the guest name, MAC address, static IPv4 address, gateway and bridge, so that several guests can run side by side, one per node, as in the backward-compatibility bench below. The full list of options is at the top of `tests/vm/run.sh`.
 
 ### Enter the VM (Inside Container)
 
 ```bash
 cd tests/vm
-./enter.sh              # Connect via SSH to VM at localhost:10022
+./enter.sh              # Connect via SSH to the VM started with -u (localhost:10022)
 ```
+
+`enter.sh` only reaches a guest started with `-u`. Connect to a bridged guest with SSH at its own address.
 
 All VM operations (boot, stop, test) happen from within the container after changing to `/opt/kernel-playground`. The container has direct KVM access and runs QEMU without requiring host involvement.
 
@@ -224,6 +244,8 @@ The iproute2 source is mounted from the Container at `/mnt/iproute2`. All iprout
 ### Run the ioam6-testbed.sh Test (Inside Guest VM)
 
 The ioam6-testbed.sh script creates a network topology with multiple namespaces, sets up IOAM-6 tracing, and loads GOB eBPF programs. The test includes a tmux-based UI for easy navigation.
+
+**Status:** this walkthrough was validated on the GOB v3 kernel and has not been re-run on v4 yet. It uses the default mode, whose commands are the same in v4. `ioam6_gobv2_cnt` is the historical name of the eBPF section in `src/c/netprog.bpf.c`.
 
 **Note:** Before running this test, ensure:
 1. iproute2 is built in the VM: `cd /mnt/iproute2 && ./configure && make`
@@ -363,4 +385,4 @@ While the source code specific to this repository is provided under the permissi
 ## See Also
 
 - [podman/README.md](podman/README.md) - Container setup documentation
-- [tests/vm/README.md](https://github.com/netgroup/ioam-gob-linux-kernel-qemu-setup/blob/ioam6-gob_v1/README.md) - VM setup instructions
+- [tests/vm/README.md](https://github.com/netgroup/ioam-gob-linux-kernel-qemu-setup/blob/golden-base/README.md) - VM setup instructions (`golden-base` is the branch followed by the `tests/vm` submodule)
