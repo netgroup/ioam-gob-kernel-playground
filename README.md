@@ -2,6 +2,18 @@
 
 This repository provides a complete development environment for experimenting with the **Global Opaque Block (GOB)** extension for **IOAM6** (In-Band Operational, Administration, and Maintenance over IPv6). GOB enables programmable in-band network telemetry through user-defined metadata processing via eBPF programs.
 
+## Try GOB
+
+Two directories of this repository run the 5-node GOB demo of
+`tests/scripts/gob-demo/` without the build container and the QEMU VM
+described below, each with its own README:
+
+- [browser-vm/](browser-vm/README.md) builds a web page that boots the
+  GOB kernel and the demo in the browser of the visitor.
+- [kathara/](kathara/README.md) runs the demo as a
+  [Kathara](https://www.kathara.org/) lab, with each GOB node on its own
+  GOB User-Mode Linux kernel.
+
 ## Clone the Repository
 
 ```bash
