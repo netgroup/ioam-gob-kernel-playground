@@ -1,12 +1,15 @@
-# Image for the GOB nodes of the lab: kathara/base with the iproute2 of
-# GOB (ip ioam ... gobschema), the bpftool and the libbpf headers of the
-# GOB kernel tree, which know the IOAM6_GOB program type, and a static
-# clang with only the BPF backend, to build GOB programs inside a node.
-# build.sh builds it ("image" step), with as context the sources that the
-# "sources" step exports from the playground commit: iproute2/ and the
-# parts of the GOB kernel tree that bpftool needs, linux/. Three stages on
-# Debian 12, as kathara/base. The clang stage builds LLVM: CLANG_JOBS
-# gives it more jobs.
+# Image for the GOB nodes of the lab: kathara/base with the GOB UML
+# kernel, which Kathara runs the nodes on (label org.kathara.uml.kernel),
+# the iproute2 of GOB (ip ioam ... gobschema), the bpftool and the libbpf
+# headers of the GOB kernel tree, which know the IOAM6_GOB program type,
+# and a static clang with only the BPF backend, to build GOB programs
+# inside a node. build.sh builds it ("image" step), with as context the
+# sources that the "sources" step exports from the playground commit,
+# iproute2/ and the parts of the GOB kernel tree that bpftool needs,
+# linux/, and the kernel that the "kernel" step builds, kernel/linux.
+# Three stages on Debian 12, as kathara/base. The clang stage builds LLVM:
+# CLANG_JOBS gives it more jobs. VERSION and REVISION, the tag of the
+# image and the playground commit, go into its labels.
 
 ARG LLVM_VERSION=19.1.7
 ARG LLVM_SHA256=82401fea7b79d0078043f7598b835284d6650a75b93e64b6f761ea7b63097501
@@ -70,3 +73,12 @@ COPY --from=tools /out/ /
 COPY --from=clang /opt/clang-bpf /opt/clang-bpf
 RUN ln -s /opt/clang-bpf/bin/clang /usr/local/bin/clang && \
 	ip -V && bpftool version && clang --version | head -1
+# The kernel last: a new kernel rebuilds only this layer.
+COPY kernel/linux /usr/lib/kathara-uml/linux
+ARG VERSION
+ARG REVISION
+LABEL org.kathara.uml.kernel=/usr/lib/kathara-uml/linux \
+	org.opencontainers.image.authors="Andrea Mayer <andrea.mayer@uniroma2.it>" \
+	org.opencontainers.image.source=https://github.com/netgroup/ioam-gob-kernel-playground \
+	org.opencontainers.image.version=$VERSION \
+	org.opencontainers.image.revision=$REVISION

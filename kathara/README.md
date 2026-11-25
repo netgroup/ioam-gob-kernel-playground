@@ -2,10 +2,10 @@
 
 This directory runs the IOAM GOB v3 demo as a Kathara lab, with a GOB
 kernel per node: n1 to n5 are UML devices on the GOB v3 kernel of this
-repository, h1 and h2 are plain containers on the kernel of the host. It
-is the five node demo of `tests/scripts/gob-demo`
-(`gob-demo-5node-recv-auto.sh`), where the five nodes are network
-namespaces of one kernel.
+repository, which their image carries, and h1 and h2 are plain
+containers on the kernel of the host. It is the five node demo of
+`tests/scripts/gob-demo` (`gob-demo-5node-recv-auto.sh`), where the five
+nodes are network namespaces of one kernel.
 
     h1 --A-- n1 --B-- n2 --C-- n3 --D-- n4 --E-- n5 --F-- h2
              encap                                End.DT6
@@ -17,44 +17,23 @@ submodule here, which has in turn the Kathara fork as its submodule
 
 ## Set it up
 
-1. The submodules: kathara-uml-lab and the Kathara fork inside it, and,
-   in a fresh clone, the GOB sources of the playground (`kernel/linux`,
-   `iproute2`):
+The lab needs an x86-64 Linux host, since User-Mode Linux runs only on
+x86, with Docker, which Kathara runs the devices on, and Python 3 with
+venv. Initialize the two submodules, kathara-uml-lab and the Kathara
+fork inside it, and install that Kathara in a venv:
 
-   ```
-   git submodule update --init --recursive kathara/kathara-uml-lab
-   git submodule update --init kernel/linux iproute2
-   ```
+```
+git submodule update --init --recursive kathara/kathara-uml-lab
+python3 -m venv ~/kathara-uml-venv
+~/kathara-uml-venv/bin/pip install kathara/kathara-uml-lab/kathara
+alias kathara="$HOME/kathara-uml-venv/bin/python $PWD/kathara/kathara-uml-lab/kathara/src/kathara.py"
+```
 
-   `build.sh` exports the sources at the commits that the playground
-   commit records, with `git archive`: `kernel/linux` and `iproute2` only
-   need to have those commits, and their work trees are not touched.
-   Where they are already work trees on other branches, do not run the
-   second command, which would move them to the recorded commits: fetch
-   the commits into them instead. In a worktree without them, give the
-   playground that has them: `REPO=<playground> kathara/build.sh`.
-
-2. The kernel, the image and the program, all built with Docker, where
-   Kathara looks for the image:
-
-   ```
-   kathara/build.sh
-   ```
-
-   It writes into `kathara/out`: the GOB UML kernel in
-   `out/kernel/linux` (`lab/kernel` is a link to `../out/kernel`), the
-   image `kathara-uml/gob`, and the GOB program in
-   `lab/shared/ioam6_gob_recv.o`. The first run builds LLVM for clang;
-   give it more jobs with `CLANG_JOBS=<n>`. Each step can also run alone:
-   see the top of [build.sh](build.sh).
-
-3. Kathara with UML devices, in a venv:
-
-   ```
-   python3 -m venv ~/kathara-uml-venv
-   ~/kathara-uml-venv/bin/pip install kathara/kathara-uml-lab/kathara
-   alias kathara="$HOME/kathara-uml-venv/bin/python $PWD/kathara/kathara-uml-lab/kathara/src/kathara.py"
-   ```
+Nothing else is needed to run the lab: the GOB nodes run on the image
+`ghcr.io/netgroup/kathara-uml-gob:6.18.0-rc1-494d8b67e580`, which carries
+the GOB UML kernel together with the tools of GOB, and Kathara pulls it
+at the first lstart. The GOB program, `lab/shared/ioam6_gob_recv.o`, is
+in the repository. To build them yourself, see [Build it](#build-it).
 
 ## Run it
 
@@ -85,6 +64,50 @@ and the trace buffer of n5 has a line per packet from `bpf_printk()`:
 bpf_trace_printk: ioam6_gob_recv node=5: recv count=4 metric=50
 ```
 
+## Build it
+
+`build.sh` builds the kernel, the image and the program from the
+playground commit, with Docker:
+
+```
+git submodule update --init kernel/linux iproute2
+kathara/build.sh
+```
+
+It exports the sources at the commits that the playground commit
+records, with `git archive`: `kernel/linux` and `iproute2` only need to
+have those commits, and their work trees are not touched. Where they are
+already work trees on other branches, do not run the first command,
+which would move them to the recorded commits: fetch the commits into
+them instead. In a worktree without them, give the playground that has
+them: `REPO=<playground> kathara/build.sh`.
+
+It writes the GOB UML kernel into `kathara/out/kernel/linux`, builds
+the image with that kernel in it, tagged with the release and the commit
+of the kernel, and the GOB program into `lab/shared/ioam6_gob_recv.o`.
+`lab/lab.conf` must name the image that it builds: when the kernel
+changes, build.sh stops and says which image to write there. The first
+run builds LLVM for clang; give it more jobs with `CLANG_JOBS=<n>`. Docker
+then reuses that build only for the same `CLANG_JOBS`: with another value
+it builds LLVM again. Each step can also run alone: see the top of
+[build.sh](build.sh).
+
+## Run a node on another kernel
+
+The kernel option of lab.conf takes the place of the kernel of the
+image on a node, while the image keeps giving the node its tools. To try
+a changed GOB kernel on n3 only, build it with `build.sh sources kernel`
+and uncomment the line in [lab/lab.conf](lab/lab.conf):
+
+```
+n3[kernel]="../out/kernel/linux"
+```
+
+The path is relative to the lab directory. The example lab of
+kathara-uml-lab,
+[examples/router](https://github.com/netgroup/kathara-uml-lab/tree/main/examples/router), runs a
+device on a kernel file and on an image of its own in the same way.
+
 ## The lab
 
 | Device | Addresses | Role |
@@ -105,8 +128,8 @@ aggregation `{min, max, sum, count}` of a metric of the nodes, 10 for n1
 up to 50 for n5. Each node records the GOB that it received in slot K of
 its map `gob_recv`, then folds its own metric into it.
 
-- [lab/lab.conf](lab/lab.conf): n1 to n5 on `kernel/linux` and on the
-  image `kathara-uml/gob`, h1 and h2 on kathara/base, IPv6 on.
+- [lab/lab.conf](lab/lab.conf): n1 to n5 on the image of the GOB nodes,
+  and so on its kernel, h1 and h2 on kathara/base, IPv6 on.
 - `lab/*.startup`: addresses and routes, the IOAM trace on n1, End.DT6 on
   n5, `ioam6_enabled` on the input of n2 to n5, and
   `bash /shared/gob-node.sh <node> <metric>` on each GOB node.
@@ -119,7 +142,7 @@ its map `gob_recv`, then folds its own metric into it.
 
 The image has clang, with only the BPF backend, and bpftool: the GOB
 program can be built inside a node, against the BTF of the kernel it runs
-on, and loaded in place of the one that build.sh built. On n3:
+on, and loaded in place of `lab/shared/ioam6_gob_recv.o`. On n3:
 
 ```
 kathara exec n3 "bash -c 'bpftool btf dump file /sys/kernel/btf/vmlinux format c > /tmp/vmlinux.h'"
@@ -145,16 +168,23 @@ for every node, change `src/c/ioam6_gob_recv.bpf.c`, commit, and run
   [kernel/gob.fragment](kernel/gob.fragment): GOB, SRv6 behaviors and BTF.
   `out/kernel/BUILD-INFO` records the commit and the fragments.
 - The image, [image/Dockerfile](image/Dockerfile): kathara/base with the
+  kernel, in `/usr/lib/kathara-uml/linux` with the label
+  `org.kathara.uml.kernel` that makes Kathara run the nodes on it, the
   iproute2 of the playground commit (`ip ioam gobschema`), the bpftool
   and the libbpf headers of its kernel tree, which know the IOAM6_GOB
   program type, and a static clang with only the BPF backend (LLVM
-  19.1.7).
-- The program, `lab/shared/ioam6_gob_recv.o`: `src/c/ioam6_gob_recv.bpf.c`
-  built against the BTF of the kernel, and linked again with
-  `bpftool gen object`, which drops the DWARF and keeps the BTF.
+  19.1.7). Its labels also give the repository, the tag and the
+  playground commit it was built from.
+- The program, `lab/shared/ioam6_gob_recv.o`: `src/c/ioam6_gob_recv.bpf.c`,
+  copied next to it, built against the BTF of the kernel of the image, and
+  linked again with `bpftool gen object`, which drops the DWARF and keeps
+  the BTF.
 
 ## Test
 
 `build.sh test` runs [tests/check-gob.sh](tests/check-gob.sh), where
-Kathara and the image are: a copy of the lab, a ping from h1 to h2, the
-table above and the bpf_printk lines of n5.
+Kathara and the image are. It starts a copy of the lab and checks that
+every GOB node runs on the kernel of its image, the ping from h1 to h2,
+the table above and the bpf_printk lines of n5. If build.sh has built
+the kernel in `out/kernel`, it then starts the lab again with n3 on that
+kernel through the kernel option, and checks the same.

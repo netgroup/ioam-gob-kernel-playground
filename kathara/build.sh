@@ -12,18 +12,21 @@
 #            and the GOB program (src/c), at the commits it records
 #   kernel   the GOB UML kernel, with uml-kernel/build.sh of kathara-uml-lab:
 #            its base, trace and net fragments and kernel/gob.fragment
-#   image    the image kathara-uml/gob (long the first time: it builds LLVM)
+#   image    the image of the GOB nodes, with the kernel in it (long the
+#            first time: it builds LLVM), ghcr.io/netgroup/kathara-uml-gob:<tag>,
+#            where the tag is the release and the commit of the kernel;
+#            lab/lab.conf must name that image
 #   program  lab/shared/ioam6_gob_recv.o, the GOB program, against the BTF
-#            of the kernel, in a container of the image
+#            of the kernel of the image, in a container of the image
 #   all      the four steps above, in this order
 #   test     tests/check-gob.sh, where Kathara and the image are (not part
 #            of all)
 #   clean    remove $WORK (not part of all)
 #
-# Everything is written under $WORK (default: kathara/out); lab/kernel
-# is a link to ../out/kernel. The Kathara of kathara-uml-lab/kathara runs
-# the lab. Only sources needs the git trees of the playground: the other
-# steps can run on a copy of kathara/ with its out.
+# Everything is written under $WORK (default: kathara/out), but the
+# program, which goes to lab/shared. The Kathara of kathara-uml-lab/kathara
+# runs the lab. Only sources needs the git trees of the playground: the
+# other steps can run on a copy of kathara/ with its out.
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 
@@ -34,7 +37,7 @@ WORK=${WORK:-$HERE/out}			# everything built goes here
 CLANG_JOBS=${CLANG_JOBS:-8}		# jobs of the LLVM build
 
 LAB=$HERE/kathara-uml-lab
-IMAGE=kathara-uml/gob
+IMAGE_REPO=ghcr.io/netgroup/kathara-uml-gob
 PATCH=$HERE/kernel/0001-bpf-Build-bpf_trace_printk-without-BPF_EVENTS.patch
 
 die()
@@ -109,22 +112,63 @@ do_kernel()
 	cat "$WORK/kernel/BUILD-INFO"
 }
 
+# The value of a line "key: value" of the BUILD-INFO of the kernel.
+build_info()
+{
+	sed -n "s/^$1: //p" "$WORK/kernel/BUILD-INFO"
+}
+
+# The tag of the image: the release of the kernel in it and the first 12
+# characters of its commit, as 6.18.0-rc1-494d8b67e580.
+image_tag()
+{
+	local release source
+
+	if [ ! -f "$WORK/kernel/BUILD-INFO" ]; then
+		die "no kernel in $WORK/kernel: build.sh kernel"
+	fi
+	release=$(build_info release)
+	source=$(build_info source)
+	echo "$release-${source:0:12}"
+}
+
+# The images that lab/lab.conf gives its GOB nodes, one per line.
+lab_images()
+{
+	sed -n 's/^n[0-9]*\[image\]="\(.*\)"$/\1/p' "$HERE/lab/lab.conf" | sort -u
+}
+
 do_image()
 {
-	step "image ($CLANG_JOBS jobs for LLVM)"
-	docker build -t "$IMAGE" --build-arg CLANG_JOBS="$CLANG_JOBS" -f "$HERE/image/Dockerfile" "$WORK/image" \
-		> "$WORK/logs/image.log" 2>&1 || { tail -20 "$WORK/logs/image.log"; die "image failed, see $WORK/logs/image.log"; }
+	local tag image revision
+
+	tag=$(image_tag) || exit 1
+	image=$IMAGE_REPO:$tag
+	step "image $image ($CLANG_JOBS jobs for LLVM)"
+	# The lab runs on this image only if lab.conf names it.
+	if [ "$(lab_images)" != "$image" ]; then
+		die "lab/lab.conf names $(lab_images | tr '\n' ' ')instead of $image: set n1 to n5[image] to it"
+	fi
+	revision=$(awk '$1 == "playground" { print $2 }' "$WORK/SOURCES.txt")
+	mkdir -p "$WORK/image/kernel" || die "cannot create $WORK/image/kernel"
+	cp "$WORK/kernel/linux" "$WORK/image/kernel/linux" || die "cannot copy the kernel into the image context"
+	docker build -t "$image" --build-arg CLANG_JOBS="$CLANG_JOBS" --build-arg VERSION="$tag" \
+		--build-arg REVISION="$revision" -f "$HERE/image/Dockerfile" "$WORK/image" > "$WORK/logs/image.log" 2>&1 ||
+		{ tail -20 "$WORK/logs/image.log"; die "image failed, see $WORK/logs/image.log"; }
 	tail -3 "$WORK/logs/image.log"
 }
 
 do_program()
 {
+	local image
+
+	image=$IMAGE_REPO:$(image_tag) || exit 1
 	step "program"
 	# As the user, so that the files written in lab/shared are the user's.
 	# shellcheck disable=SC2016 # expanded in the container
-	docker run --rm --user "$(id -u):$(id -g)" -v "$WORK/kernel/linux:/kernel:ro" -v "$WORK/src/c:/src:ro" \
-		-v "$HERE/lab/shared:/shared" "$IMAGE" bash -c '
-		bpftool btf dump file /kernel format c > /tmp/vmlinux.h &&
+	docker run --rm --user "$(id -u):$(id -g)" -v "$WORK/src/c:/src:ro" -v "$HERE/lab/shared:/shared" "$image" \
+		bash -c '
+		bpftool btf dump file /usr/lib/kathara-uml/linux format c > /tmp/vmlinux.h &&
 		clang -O2 -g -target bpf -I/tmp -c /src/ioam6_gob_recv.bpf.c -o /tmp/ioam6_gob_recv.bpf.o &&
 		bpftool gen object /shared/ioam6_gob_recv.o /tmp/ioam6_gob_recv.bpf.o &&
 		cp /src/ioam6_gob_recv.bpf.c /shared/' || die "program failed"
