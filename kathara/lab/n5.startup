@@ -1,0 +1,10 @@
+ip -6 addr add fd45::5/64 dev eth0
+ip -6 addr add fd56::5/64 dev eth1
+ip -6 route add fdcc::2/128 via fd56::6 dev eth1
+ip -6 route add fdcc::1/128 via fd45::4 dev eth0
+sysctl -w net.ipv6.conf.eth0.ioam6_enabled=1
+bash /shared/gob-node.sh 5 50
+
+# The end of the GOB domain: the encapsulation from n1 comes off, and the
+# packet of h1 goes on to h2.
+ip -6 route add fcff::5/128 encap seg6local action End.DT6 table main dev eth0

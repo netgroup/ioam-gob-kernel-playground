@@ -1,0 +1,169 @@
+#!/bin/bash
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Build what the IOAM GOB v3 lab on Kathara needs, from a commit of the
+# playground, and test it. The kernel, the image and the program are built
+# with Docker, where Kathara looks for the image. See README.md.
+#
+# Usage: ./build.sh [step...]          (no step: all)
+#
+#   sources  export from the playground commit the GOB kernel tree
+#            (kernel/linux) with the bpf_printk patch of kernel/, iproute2
+#            and the GOB program (src/c), at the commits it records
+#   kernel   the GOB UML kernel, with uml-kernel/build.sh of kathara-uml-lab:
+#            its base, trace and net fragments and kernel/gob.fragment
+#   image    the image kathara-uml/gob (long the first time: it builds LLVM)
+#   program  lab/shared/ioam6_gob_recv.o, the GOB program, against the BTF
+#            of the kernel, in a container of the image
+#   all      the four steps above, in this order
+#   test     tests/check-gob.sh, where Kathara and the image are (not part
+#            of all)
+#   clean    remove $WORK (not part of all)
+#
+# Everything is written under $WORK (default: kathara/out); lab/kernel
+# is a link to ../out/kernel. The Kathara of kathara-uml-lab/kathara runs
+# the lab. Only sources needs the git trees of the playground: the other
+# steps can run on a copy of kathara/ with its out.
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+
+# Configuration (environment variables).
+REPO=${REPO:-$(cd "$HERE/.." && pwd)}	# the playground
+REF=${REF:-HEAD}			# commit to build from
+WORK=${WORK:-$HERE/out}			# everything built goes here
+CLANG_JOBS=${CLANG_JOBS:-8}		# jobs of the LLVM build
+
+LAB=$HERE/kathara-uml-lab
+IMAGE=kathara-uml/gob
+PATCH=$HERE/kernel/0001-bpf-Build-bpf_trace_printk-without-BPF_EVENTS.patch
+
+die()
+{
+	echo "build.sh: $*" >&2
+	exit 1
+}
+
+step()
+{
+	echo
+	echo "=== $(date +%T) $*"
+}
+
+# The commit that the playground commit records for a submodule.
+submodule_sha()
+{
+	git -C "$REPO" ls-tree "$REF_SHA" "$1" | awk '$2 == "commit" { print $3 }'
+}
+
+# Exports into dest the submodule at path, at the commit of the playground
+# commit, or only the paths given of it.
+export_submodule()
+{
+	local path=$1 dest=$2 sha
+
+	shift 2
+	sha=$(submodule_sha "$path")
+	if [ -z "$sha" ]; then
+		die "$path is not a submodule at $REF"
+	fi
+	if [ "$(git -C "$REPO/$path" rev-parse --show-toplevel 2>/dev/null)" != "$(cd "$REPO/$path" && pwd -P)" ] ||
+		! git -C "$REPO/$path" cat-file -e "$sha^{commit}" 2>/dev/null; then
+		die "$path: commit $sha missing, run: git -C $REPO submodule update --init $path, or set REPO"
+	fi
+	rm -rf "$dest"
+	mkdir -p "$dest" || die "cannot create $dest"
+	git -C "$REPO/$path" archive "$sha" "$@" | tar -x -C "$dest" || die "$path: archive failed"
+	echo "$path $sha $(git -C "$REPO/$path" log -1 --format=%s "$sha")"
+}
+
+do_sources()
+{
+	step "sources (REF=$REF)"
+	REF_SHA=$(git -C "$REPO" rev-parse --verify "$REF^{commit}") || die "bad REF $REF"
+	{
+		echo "playground $REF_SHA $(git -C "$REPO" log -1 --format=%s "$REF_SHA")"
+		export_submodule kernel/linux "$WORK/src/linux"
+		export_submodule iproute2 "$WORK/image/iproute2"
+		# What bpftool and the libbpf headers need of the kernel tree.
+		export_submodule kernel/linux "$WORK/image/linux" tools kernel/bpf include scripts >/dev/null
+	} > "$WORK/SOURCES.txt" || die "sources failed"
+	patch -s -d "$WORK/src/linux" -p1 < "$PATCH" || die "the bpf_printk patch does not apply"
+	echo "patch $(basename "$PATCH")" >> "$WORK/SOURCES.txt"
+	rm -rf "$WORK/src/c"
+	mkdir -p "$WORK/src/c" || die "cannot create $WORK/src/c"
+	git -C "$REPO" archive "$REF_SHA" src/c/ioam6_gob_recv.bpf.c | tar -x -C "$WORK/src/c" --strip-components=2 ||
+		die "the GOB program: archive failed"
+	cat "$WORK/SOURCES.txt"
+}
+
+do_kernel()
+{
+	step "kernel"
+	bash "$LAB/uml-kernel/build.sh" --src "$WORK/src/linux" \
+		--fragment "$LAB/uml-kernel/trace.fragment" --fragment "$LAB/uml-kernel/net.fragment" \
+		--fragment "$HERE/kernel/gob.fragment" --out "$WORK/kernel" > "$WORK/logs/kernel.log" 2>&1 ||
+		{ tail -20 "$WORK/logs/kernel.log"; die "kernel failed, see $WORK/logs/kernel.log"; }
+	# build.sh does not know where a tree given with --src comes from.
+	sed -i "s|^source: .*|source: $(grep '^kernel/linux ' "$WORK/SOURCES.txt" | cut -d' ' -f2), $(basename "$PATCH")|" \
+		"$WORK/kernel/BUILD-INFO"
+	cat "$WORK/kernel/BUILD-INFO"
+}
+
+do_image()
+{
+	step "image ($CLANG_JOBS jobs for LLVM)"
+	docker build -t "$IMAGE" --build-arg CLANG_JOBS="$CLANG_JOBS" -f "$HERE/image/Dockerfile" "$WORK/image" \
+		> "$WORK/logs/image.log" 2>&1 || { tail -20 "$WORK/logs/image.log"; die "image failed, see $WORK/logs/image.log"; }
+	tail -3 "$WORK/logs/image.log"
+}
+
+do_program()
+{
+	step "program"
+	# As the user, so that the files written in lab/shared are the user's.
+	# shellcheck disable=SC2016 # expanded in the container
+	docker run --rm --user "$(id -u):$(id -g)" -v "$WORK/kernel/linux:/kernel:ro" -v "$WORK/src/c:/src:ro" \
+		-v "$HERE/lab/shared:/shared" "$IMAGE" bash -c '
+		bpftool btf dump file /kernel format c > /tmp/vmlinux.h &&
+		clang -O2 -g -target bpf -I/tmp -c /src/ioam6_gob_recv.bpf.c -o /tmp/ioam6_gob_recv.bpf.o &&
+		bpftool gen object /shared/ioam6_gob_recv.o /tmp/ioam6_gob_recv.bpf.o &&
+		cp /src/ioam6_gob_recv.bpf.c /shared/' || die "program failed"
+	ls -l "$HERE/lab/shared/ioam6_gob_recv.o"
+}
+
+do_test()
+{
+	step "test"
+	bash "$HERE/tests/check-gob.sh"
+}
+
+do_clean()
+{
+	step "clean"
+	case "$WORK" in
+	/ | "$HOME" | "$REPO" | "$HERE")
+		die "WORK=$WORK: will not remove it"
+		;;
+	esac
+	rm -rf "$WORK" || die "cannot remove $WORK"
+}
+
+if [ ! -f "$LAB/uml-kernel/build.sh" ]; then
+	die "no kathara-uml-lab: git -C $REPO submodule update --init --recursive kathara/kathara-uml-lab"
+fi
+mkdir -p "$WORK/logs" "$WORK/src" "$WORK/image" || die "cannot create $WORK"
+
+steps=("$@")
+if [ ${#steps[@]} = 0 ] || [ "${steps[*]}" = all ]; then
+	steps=(sources kernel image program)
+fi
+for s in "${steps[@]}"; do
+	case "$s" in
+	sources | kernel | image | program | test | clean)
+		"do_$s"
+		;;
+	*)
+		die "unknown step $s (see the top of $0)"
+		;;
+	esac
+done

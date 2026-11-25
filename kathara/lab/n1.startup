@@ -1,0 +1,12 @@
+ip -6 addr add fd01::2/64 dev eth0
+ip -6 addr add fd12::1/64 dev eth1
+ip -6 route add fcff::5/128 via fd12::2 dev eth1
+ip -6 route add fdcc::1/128 via fd01::1 dev eth0
+bash /shared/gob-node.sh 1 10
+
+# The traffic to h2 gets an IOAM trace, with room for the node data of 5
+# nodes (size 20) and a GOB of 16 bytes (gobsize 16), and is encapsulated
+# up to n5 (fcff::5).
+ip -6 route add fdcc::2/128 encap ioam6 mode encap tundst fcff::5 \
+	trace prealloc type 0x800000 ns 123 size 20 gobsize 16 \
+	dev eth1

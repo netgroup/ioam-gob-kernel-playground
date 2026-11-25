@@ -1,0 +1,6 @@
+ip -6 addr add fd12::2/64 dev eth0
+ip -6 addr add fd23::2/64 dev eth1
+ip -6 route add fcff::5/128 via fd23::3 dev eth1
+ip -6 route add fdcc::1/128 via fd12::1 dev eth0
+sysctl -w net.ipv6.conf.eth0.ioam6_enabled=1
+bash /shared/gob-node.sh 2 20

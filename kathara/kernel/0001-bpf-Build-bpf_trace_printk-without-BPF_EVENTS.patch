@@ -1,0 +1,320 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Andrea Mayer <andrea.mayer@uniroma2.it>
+Date: Sat, 21 Nov 2026 03:26:15 +0100
+Subject: [PATCH] bpf: Build bpf_trace_printk() without BPF_EVENTS
+
+bpf_trace_printk() and bpf_trace_vprintk(), the helpers behind
+bpf_printk(), and the bpf_trace_printk tracepoint they write to are in
+kernel/trace/bpf_trace.c, which is built only with CONFIG_BPF_EVENTS.
+BPF_EVENTS depends on PERF_EVENTS and on KPROBE_EVENTS or UPROBE_EVENTS.
+Without them the kernel has only the __weak bpf_get_trace_printk_proto()
+and bpf_get_trace_vprintk_proto(), which return NULL, and the verifier
+refuses every program that calls bpf_printk():
+
+  program of this type cannot use helper bpf_trace_printk#6
+
+This is the case of User-Mode Linux, which has no PERF_EVENTS, even with
+BPF_SYSCALL and event tracing enabled. The helpers need neither perf nor
+probes: they format with bpf_bprintf_prepare() and write to a trace
+event.
+
+Move them unchanged, with the definition of the tracepoint, into
+kernel/trace/bpf_trace_printk.c, built with BPF_SYSCALL and
+EVENT_TRACING. KPROBE_EVENTS and UPROBE_EVENTS select TRACING, which
+selects EVENT_TRACING, so every kernel that had the helpers still has
+them.
+
+Tested on x86_64 with BPF_EVENTS on and off, and on UML with
+FTRACE_SYSCALLS: a socket filter that calls bpf_printk() now loads, and
+BPF_PROG_TEST_RUN writes its line to the trace buffer.
+
+[ Kathara UML devices, 6.18 (GOB v3, 494d8b67e580 of ioam6-gob_v3): the
+  7.3 version, with ARG_MEM_SIZE and ARG_MEM_SIZE_OR_ZERO named
+  ARG_CONST_SIZE and ARG_CONST_SIZE_OR_ZERO, as 6.18 names them. Tested
+  on UML only: the GOB program of kathara/lab loads, and its
+  bpf_printk() line reaches the trace buffer. ]
+Signed-off-by: Andrea Mayer <andrea.mayer@uniroma2.it>
+---
+ kernel/trace/Kconfig            |   4 ++
+ kernel/trace/Makefile           |   2 +
+ kernel/trace/bpf_trace.c        | 102 -----------------------------
+ kernel/trace/bpf_trace_printk.c | 112 ++++++++++++++++++++++++++++++++
+ 4 files changed, 118 insertions(+), 102 deletions(-)
+ create mode 100644 kernel/trace/bpf_trace_printk.c
+
+diff --git a/kernel/trace/Kconfig b/kernel/trace/Kconfig
+index 35d043b19332..3ae8f5156260 100644
+--- a/kernel/trace/Kconfig
++++ b/kernel/trace/Kconfig
+@@ -879,6 +879,10 @@ config BPF_EVENTS
+ 	  This allows the user to attach BPF programs to kprobe, uprobe, and
+ 	  tracepoint events.
+ 
++config BPF_TRACE_PRINTK
++	def_bool y
++	depends on BPF_SYSCALL && EVENT_TRACING
++
+ config DYNAMIC_EVENTS
+ 	def_bool n
+ 
+diff --git a/kernel/trace/Makefile b/kernel/trace/Makefile
+index b0c44f438999..8444ff64baf1 100644
+--- a/kernel/trace/Makefile
++++ b/kernel/trace/Makefile
+@@ -54,6 +54,7 @@ KCOV_INSTRUMENT_trace_preemptirq.o := n
+ KCOV_INSTRUMENT_trace_irqsoff.o := n
+ 
+ CFLAGS_bpf_trace.o := -I$(src)
++CFLAGS_bpf_trace_printk.o := -I$(src)
+ 
+ CFLAGS_trace_benchmark.o := -I$(src)
+ CFLAGS_trace_events_filter.o := -I$(src)
+@@ -109,6 +110,7 @@ obj-$(CONFIG_SYNTH_EVENTS) += trace_events_synth.o
+ obj-$(CONFIG_HIST_TRIGGERS) += trace_events_hist.o
+ obj-$(CONFIG_USER_EVENTS) += trace_events_user.o
+ obj-$(CONFIG_BPF_EVENTS) += bpf_trace.o
++obj-$(CONFIG_BPF_TRACE_PRINTK) += bpf_trace_printk.o
+ obj-$(CONFIG_KPROBE_EVENTS) += trace_kprobe.o
+ obj-$(CONFIG_TRACEPOINTS) += error_report-traces.o
+ obj-$(CONFIG_TRACEPOINTS) += power-traces.o
+diff --git a/kernel/trace/bpf_trace.c b/kernel/trace/bpf_trace.c
+index d22e78e7f28d..0555a51ae567 100644
+--- a/kernel/trace/bpf_trace.c
++++ b/kernel/trace/bpf_trace.c
+@@ -35,9 +35,6 @@
+ #include "trace_probe.h"
+ #include "trace.h"
+ 
+-#define CREATE_TRACE_POINTS
+-#include "bpf_trace.h"
+-
+ #define bpf_event_rcu_dereference(p)					\
+ 	rcu_dereference_protected(p, lockdep_is_held(&bpf_event_mutex))
+ 
+@@ -386,105 +383,6 @@ static const struct bpf_func_proto bpf_probe_write_user_proto = {
+ 	.arg3_type	= ARG_CONST_SIZE,
+ };
+ 
+-#define MAX_TRACE_PRINTK_VARARGS	3
+-#define BPF_TRACE_PRINTK_SIZE		1024
+-
+-BPF_CALL_5(bpf_trace_printk, char *, fmt, u32, fmt_size, u64, arg1,
+-	   u64, arg2, u64, arg3)
+-{
+-	u64 args[MAX_TRACE_PRINTK_VARARGS] = { arg1, arg2, arg3 };
+-	struct bpf_bprintf_data data = {
+-		.get_bin_args	= true,
+-		.get_buf	= true,
+-	};
+-	int ret;
+-
+-	ret = bpf_bprintf_prepare(fmt, fmt_size, args,
+-				  MAX_TRACE_PRINTK_VARARGS, &data);
+-	if (ret < 0)
+-		return ret;
+-
+-	ret = bstr_printf(data.buf, MAX_BPRINTF_BUF, fmt, data.bin_args);
+-
+-	trace_bpf_trace_printk(data.buf);
+-
+-	bpf_bprintf_cleanup(&data);
+-
+-	return ret;
+-}
+-
+-static const struct bpf_func_proto bpf_trace_printk_proto = {
+-	.func		= bpf_trace_printk,
+-	.gpl_only	= true,
+-	.ret_type	= RET_INTEGER,
+-	.arg1_type	= ARG_PTR_TO_MEM | MEM_RDONLY,
+-	.arg2_type	= ARG_CONST_SIZE,
+-};
+-
+-static void __set_printk_clr_event(struct work_struct *work)
+-{
+-	/*
+-	 * This program might be calling bpf_trace_printk,
+-	 * so enable the associated bpf_trace/bpf_trace_printk event.
+-	 * Repeat this each time as it is possible a user has
+-	 * disabled bpf_trace_printk events.  By loading a program
+-	 * calling bpf_trace_printk() however the user has expressed
+-	 * the intent to see such events.
+-	 */
+-	if (trace_set_clr_event("bpf_trace", "bpf_trace_printk", 1))
+-		pr_warn_ratelimited("could not enable bpf_trace_printk events");
+-}
+-static DECLARE_WORK(set_printk_work, __set_printk_clr_event);
+-
+-const struct bpf_func_proto *bpf_get_trace_printk_proto(void)
+-{
+-	schedule_work(&set_printk_work);
+-	return &bpf_trace_printk_proto;
+-}
+-
+-BPF_CALL_4(bpf_trace_vprintk, char *, fmt, u32, fmt_size, const void *, args,
+-	   u32, data_len)
+-{
+-	struct bpf_bprintf_data data = {
+-		.get_bin_args	= true,
+-		.get_buf	= true,
+-	};
+-	int ret, num_args;
+-
+-	if (data_len & 7 || data_len > MAX_BPRINTF_VARARGS * 8 ||
+-	    (data_len && !args))
+-		return -EINVAL;
+-	num_args = data_len / 8;
+-
+-	ret = bpf_bprintf_prepare(fmt, fmt_size, args, num_args, &data);
+-	if (ret < 0)
+-		return ret;
+-
+-	ret = bstr_printf(data.buf, MAX_BPRINTF_BUF, fmt, data.bin_args);
+-
+-	trace_bpf_trace_printk(data.buf);
+-
+-	bpf_bprintf_cleanup(&data);
+-
+-	return ret;
+-}
+-
+-static const struct bpf_func_proto bpf_trace_vprintk_proto = {
+-	.func		= bpf_trace_vprintk,
+-	.gpl_only	= true,
+-	.ret_type	= RET_INTEGER,
+-	.arg1_type	= ARG_PTR_TO_MEM | MEM_RDONLY,
+-	.arg2_type	= ARG_CONST_SIZE,
+-	.arg3_type	= ARG_PTR_TO_MEM | PTR_MAYBE_NULL | MEM_RDONLY,
+-	.arg4_type	= ARG_CONST_SIZE_OR_ZERO,
+-};
+-
+-const struct bpf_func_proto *bpf_get_trace_vprintk_proto(void)
+-{
+-	schedule_work(&set_printk_work);
+-	return &bpf_trace_vprintk_proto;
+-}
+-
+ BPF_CALL_5(bpf_seq_printf, struct seq_file *, m, char *, fmt, u32, fmt_size,
+ 	   const void *, args, u32, data_len)
+ {
+diff --git a/kernel/trace/bpf_trace_printk.c b/kernel/trace/bpf_trace_printk.c
+new file mode 100644
+index 000000000000..fe56e5290cdd
+--- /dev/null
++++ b/kernel/trace/bpf_trace_printk.c
+@@ -0,0 +1,112 @@
++// SPDX-License-Identifier: GPL-2.0
++/* Copyright (c) 2011-2015 PLUMgrid, http://plumgrid.com
++ * Copyright (c) 2016 Facebook
++ */
++#include <linux/bpf.h>
++#include <linux/filter.h>
++#include <linux/printk.h>
++#include <linux/string.h>
++#include <linux/trace_events.h>
++#include <linux/workqueue.h>
++
++#define CREATE_TRACE_POINTS
++#include "bpf_trace.h"
++
++#define MAX_TRACE_PRINTK_VARARGS	3
++#define BPF_TRACE_PRINTK_SIZE		1024
++
++BPF_CALL_5(bpf_trace_printk, char *, fmt, u32, fmt_size, u64, arg1,
++	   u64, arg2, u64, arg3)
++{
++	u64 args[MAX_TRACE_PRINTK_VARARGS] = { arg1, arg2, arg3 };
++	struct bpf_bprintf_data data = {
++		.get_bin_args	= true,
++		.get_buf	= true,
++	};
++	int ret;
++
++	ret = bpf_bprintf_prepare(fmt, fmt_size, args,
++				  MAX_TRACE_PRINTK_VARARGS, &data);
++	if (ret < 0)
++		return ret;
++
++	ret = bstr_printf(data.buf, MAX_BPRINTF_BUF, fmt, data.bin_args);
++
++	trace_bpf_trace_printk(data.buf);
++
++	bpf_bprintf_cleanup(&data);
++
++	return ret;
++}
++
++static const struct bpf_func_proto bpf_trace_printk_proto = {
++	.func		= bpf_trace_printk,
++	.gpl_only	= true,
++	.ret_type	= RET_INTEGER,
++	.arg1_type	= ARG_PTR_TO_MEM | MEM_RDONLY,
++	.arg2_type	= ARG_CONST_SIZE,
++};
++
++static void __set_printk_clr_event(struct work_struct *work)
++{
++	/*
++	 * This program might be calling bpf_trace_printk,
++	 * so enable the associated bpf_trace/bpf_trace_printk event.
++	 * Repeat this each time as it is possible a user has
++	 * disabled bpf_trace_printk events.  By loading a program
++	 * calling bpf_trace_printk() however the user has expressed
++	 * the intent to see such events.
++	 */
++	if (trace_set_clr_event("bpf_trace", "bpf_trace_printk", 1))
++		pr_warn_ratelimited("could not enable bpf_trace_printk events");
++}
++static DECLARE_WORK(set_printk_work, __set_printk_clr_event);
++
++const struct bpf_func_proto *bpf_get_trace_printk_proto(void)
++{
++	schedule_work(&set_printk_work);
++	return &bpf_trace_printk_proto;
++}
++
++BPF_CALL_4(bpf_trace_vprintk, char *, fmt, u32, fmt_size, const void *, args,
++	   u32, data_len)
++{
++	struct bpf_bprintf_data data = {
++		.get_bin_args	= true,
++		.get_buf	= true,
++	};
++	int ret, num_args;
++
++	if (data_len & 7 || data_len > MAX_BPRINTF_VARARGS * 8 ||
++	    (data_len && !args))
++		return -EINVAL;
++	num_args = data_len / 8;
++
++	ret = bpf_bprintf_prepare(fmt, fmt_size, args, num_args, &data);
++	if (ret < 0)
++		return ret;
++
++	ret = bstr_printf(data.buf, MAX_BPRINTF_BUF, fmt, data.bin_args);
++
++	trace_bpf_trace_printk(data.buf);
++
++	bpf_bprintf_cleanup(&data);
++
++	return ret;
++}
++
++static const struct bpf_func_proto bpf_trace_vprintk_proto = {
++	.func		= bpf_trace_vprintk,
++	.gpl_only	= true,
++	.ret_type	= RET_INTEGER,
++	.arg1_type	= ARG_PTR_TO_MEM | MEM_RDONLY,
++	.arg2_type	= ARG_CONST_SIZE,
++	.arg3_type	= ARG_PTR_TO_MEM | PTR_MAYBE_NULL | MEM_RDONLY,
++	.arg4_type	= ARG_CONST_SIZE_OR_ZERO,
++};
++
++const struct bpf_func_proto *bpf_get_trace_vprintk_proto(void)
++{
++	schedule_work(&set_printk_work);
++	return &bpf_trace_vprintk_proto;
++}
+-- 
+2.43.0
+

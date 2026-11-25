@@ -22,3 +22,7 @@
 [submodule "kernel/semcode"]
 	path = kernel/semcode
 	url = https://github.com/facebookexperimental/semcode
+[submodule "kathara/kathara-uml-lab"]
+	path = kathara/kathara-uml-lab
+	url = https://github.com/netgroup/kathara-uml-lab.git
+	branch = main
