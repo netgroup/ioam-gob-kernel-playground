@@ -92,6 +92,23 @@ then reuses that build only for the same `CLANG_JOBS`: with another value
 it builds LLVM again. Each step can also run alone: see the top of
 [build.sh](build.sh).
 
+To publish the image, where Kathara pulls it from, log in to ghcr.io
+with a personal access token (classic) that has `write:packages`, and
+log out after:
+
+```
+docker login ghcr.io
+kathara/build.sh publish
+docker logout ghcr.io
+```
+
+`publish` pushes the image and makes its tag an OCI index with the
+platform of the image and the description of the package page. Kathara
+reads the platforms of an image before it pulls it, and an image pushed
+as a single manifest has none: Kathara then stops with "'NoneType'
+object is not iterable". A new package on ghcr.io is private: make it
+public once, in its Package settings.
+
 ## Run a node on another kernel
 
 The kernel option of lab.conf takes the place of the kernel of the

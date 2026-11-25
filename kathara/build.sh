@@ -21,6 +21,10 @@
 #   all      the four steps above, in this order
 #   test     tests/check-gob.sh, where Kathara and the image are (not part
 #            of all)
+#   publish  push the image to ghcr.io, after docker login ghcr.io, as an OCI
+#            index with its platform and a description for the package
+#            page: Kathara reads the platforms of an image before it pulls
+#            it, and a single manifest has none (not part of all)
 #   clean    remove $WORK (not part of all)
 #
 # Everything is written under $WORK (default: kathara/out), but the
@@ -175,6 +179,37 @@ do_program()
 	ls -l "$HERE/lab/shared/ioam6_gob_recv.o"
 }
 
+# The description of the image on its package page.
+image_description()
+{
+	local tag=$1
+
+	echo "IOAM GOB v3 node for Kathara: kathara/base with the GOB UML kernel ${tag%-*} (${tag##*-}), which Kathara" \
+		"runs the node on, the iproute2 of GOB, bpftool and a BPF-only clang." \
+		"The lab is kathara/ in netgroup/ioam-gob-kernel-playground."
+}
+
+do_publish()
+{
+	local tag image digest
+
+	tag=$(image_tag) || exit 1
+	image=$IMAGE_REPO:$tag
+	step "publish $image"
+	docker push "$image" > "$WORK/logs/publish.log" 2>&1 ||
+		{ tail -5 "$WORK/logs/publish.log"; die "push failed (docker login ghcr.io first?), see $WORK/logs/publish.log"; }
+	digest=$(sed -n 's/.*: digest: \(sha256:[0-9a-f]*\) size.*/\1/p' "$WORK/logs/publish.log" | tail -1)
+	if [ -z "$digest" ]; then
+		die "no digest in the output of the push, see $WORK/logs/publish.log"
+	fi
+	# The tag becomes an index of the manifest just pushed.
+	docker buildx imagetools create -t "$image" \
+		--annotation "index:org.opencontainers.image.description=$(image_description "$tag")" \
+		"$IMAGE_REPO@$digest" >> "$WORK/logs/publish.log" 2>&1 ||
+		{ tail -5 "$WORK/logs/publish.log"; die "the index failed, see $WORK/logs/publish.log"; }
+	echo "$image: index of $digest"
+}
+
 do_test()
 {
 	step "test"
@@ -203,7 +238,7 @@ if [ ${#steps[@]} = 0 ] || [ "${steps[*]}" = all ]; then
 fi
 for s in "${steps[@]}"; do
 	case "$s" in
-	sources | kernel | image | program | test | clean)
+	sources | kernel | image | program | test | publish | clean)
 		"do_$s"
 		;;
 	*)
