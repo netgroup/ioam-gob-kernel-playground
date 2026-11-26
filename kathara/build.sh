@@ -24,7 +24,8 @@
 #   publish  push the image to ghcr.io, after docker login ghcr.io, as an OCI
 #            index with its platform and a description for the package
 #            page: Kathara reads the platforms of an image before it pulls
-#            it, and a single manifest has none (not part of all)
+#            it, and Docker gives none for an OCI image manifest (not part
+#            of all)
 #   clean    remove $WORK (not part of all)
 #
 # Everything is written under $WORK (default: kathara/out), but the

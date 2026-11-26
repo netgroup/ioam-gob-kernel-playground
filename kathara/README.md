@@ -104,10 +104,11 @@ docker logout ghcr.io
 
 `publish` pushes the image and makes its tag an OCI index with the
 platform of the image and the description of the package page. Kathara
-reads the platforms of an image before it pulls it, and an image pushed
-as a single manifest has none: Kathara then stops with "'NoneType'
-object is not iterable". A new package on ghcr.io is private: make it
-public once, in its Package settings.
+reads the platforms of an image before it pulls it, and Docker gives
+none for a tag that is an OCI image manifest, which is how Docker 29
+pushed this image: Kathara then stops with "'NoneType' object is not
+iterable". A new package on ghcr.io is private: make it public once, in
+its Package settings.
 
 ## Run a node on another kernel
 
